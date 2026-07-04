@@ -12,6 +12,13 @@ const propertySchema = new mongoose.Schema(
     builder: { type: String, default: "" },
     image: { type: String, default: "" },
     badges: [{ type: String }],
+    
+    // Which homepage carousel/section this belongs to
+    websiteSection: { 
+      type: String, 
+      enum: ["Handpicked", "Newly Launched", "Search Trends", "Offers", "Featured", "None"], 
+      default: "None" 
+    },
 
     // Extended fields
     description: { type: String, default: "" },

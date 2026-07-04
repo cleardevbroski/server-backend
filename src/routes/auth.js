@@ -179,4 +179,115 @@ router.put(
   }
 );
 
+// ─── POST /api/auth/truecaller-login ─────────────────────────────
+// Bypass OTP login for Truecaller mock
+router.post(
+  "/truecaller-login",
+  [
+    body("phone")
+      .trim()
+      .matches(/^[6-9]\d{9}$/)
+      .withMessage("Invalid phone number"),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const { phone } = req.body;
+
+      // Find or create user
+      let user = await User.findOne({ phone });
+
+      if (!user) {
+        user = await User.create({
+          phone,
+          isVerified: true,
+          role: "admin" // Auto-grant admin for bypass
+        });
+        console.log(`🆕 New admin registered via Truecaller bypass: ${phone}`);
+      } else {
+        user.isVerified = true;
+        if (user.role !== "admin") {
+          user.role = "admin"; // Upgrade existing user to admin
+        }
+        await user.save();
+      }
+
+      // Generate JWT
+      const token = jwt.sign(
+        { userId: user._id, phone: user.phone, role: user.role },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRY || "30d" }
+      );
+
+      return res.json({
+        message: "Login successful (Truecaller Bypass)",
+        token,
+        user: {
+          id: user._id,
+          phone: user.phone,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+      });
+    } catch (error) {
+      console.error("Truecaller login error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+// ─── POST /api/auth/admin-login ───────────────────────────────
+// Dedicated admin login for the dashboard
+router.post(
+  "/admin-login",
+  [
+    body("username").trim().notEmpty(),
+    body("password").notEmpty(),
+  ],
+  async (req, res) => {
+    try {
+      const username = req.body.username?.trim();
+      const password = req.body.password?.trim();
+
+      if (username !== "admin" || password !== "ClearTitle@2026") {
+        return res.status(401).json({ error: "Invalid admin credentials" });
+      }
+
+      // Ensure an admin user exists in DB to associate with the token
+      let adminUser = await User.findOne({ role: "admin", phone: "9999999999" });
+      if (!adminUser) {
+        adminUser = await User.create({
+          phone: "9999999999",
+          name: "Super Admin",
+          isVerified: true,
+          role: "admin",
+        });
+      }
+
+      const token = jwt.sign(
+        { userId: adminUser._id, phone: adminUser.phone, role: "admin" },
+        process.env.JWT_SECRET,
+        { expiresIn: process.env.JWT_EXPIRY || "30d" }
+      );
+
+      return res.json({
+        message: "Admin login successful",
+        token,
+        user: {
+          id: adminUser._id,
+          role: "admin",
+        },
+      });
+    } catch (error) {
+      console.error("Admin login error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
 module.exports = router;
