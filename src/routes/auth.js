@@ -202,17 +202,10 @@ router.post(
       let user = await User.findOne({ phone });
 
       if (!user) {
-        user = await User.create({
-          phone,
-          isVerified: true,
-          role: "admin" // Auto-grant admin for bypass
-        });
-        console.log(`🆕 New admin registered via Truecaller bypass: ${phone}`);
+        user = await User.create({ phone, isVerified: true });
+        console.log(`🆕 New user registered via Truecaller bypass: ${phone}`);
       } else {
         user.isVerified = true;
-        if (user.role !== "admin") {
-          user.role = "admin"; // Upgrade existing user to admin
-        }
         await user.save();
       }
 
@@ -254,7 +247,10 @@ router.post(
       const username = req.body.username?.trim();
       const password = req.body.password?.trim();
 
-      if (username !== "admin" || password !== "ClearTitle@2026") {
+      if (
+        username !== process.env.ADMIN_USERNAME ||
+        password !== process.env.ADMIN_PASSWORD
+      ) {
         return res.status(401).json({ error: "Invalid admin credentials" });
       }
 
