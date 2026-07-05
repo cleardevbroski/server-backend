@@ -34,6 +34,9 @@ describe("Dealers API", () => {
 
   it("rejects a duplicate slug", async () => {
     const { token } = await createAdminToken();
+    // afterEach drops all documents, which can leave the unique index
+    // rebuild racing the next insert — wait for index build to finish
+    await Dealer.init();
     await Dealer.create({ name: "Existing", slug: "dupe" });
     const res = await request(app)
       .post("/api/dealers")
