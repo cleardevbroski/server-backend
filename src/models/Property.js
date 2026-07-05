@@ -6,6 +6,7 @@ const propertySchema = new mongoose.Schema(
     subtitle: { type: String, default: "", trim: true },
     price: { type: String, required: true },
     pricePerSqft: { type: String, default: "" },
+    priceValue: { type: Number, default: 0 }, // numeric price for range filtering/sorting in /api/search
     configs: [{ type: String }],
     area: { type: String, default: "" },
     possession: { type: String, default: "" },

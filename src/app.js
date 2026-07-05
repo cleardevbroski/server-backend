@@ -12,6 +12,7 @@ const builderRoutes = require("./routes/builders");
 const heroRoutes = require("./routes/hero");
 const leadRoutes = require("./routes/leads");
 const analyticsRoutes = require("./routes/analytics");
+const searchRoutes = require("./routes/search");
 
 const app = express();
 
@@ -49,6 +50,7 @@ app.use("/api/hero", heroRoutes);
 app.use("/api/cms", require("./routes/cms"));
 app.use("/api/leads", leadRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/search", searchRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
