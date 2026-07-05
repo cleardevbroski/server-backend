@@ -28,6 +28,9 @@ router.get("/", async (req, res) => {
     if (propertyType) filter.propertyType = new RegExp(propertyType, "i");
     if (bedrooms) filter.bedrooms = parseInt(bedrooms);
     if (search) filter.$text = { $search: search };
+    
+    // Public search should only return published properties
+    filter.published = true;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -58,6 +61,62 @@ router.get("/", async (req, res) => {
     });
   } catch (error) {
     console.error("List properties error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// ─── GET /api/properties/admin ──────────────────────────────────
+// List properties (admin only, includes unpublished, with optional filters & pagination)
+router.get("/admin", auth, adminOnly, async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 20,
+      city,
+      propertyType,
+      minPrice,
+      maxPrice,
+      bedrooms,
+      search,
+      sort = "-createdAt",
+    } = req.query;
+
+    const filter = {};
+
+    if (city) filter["locality.city"] = new RegExp(city, "i");
+    if (propertyType) filter.propertyType = new RegExp(propertyType, "i");
+    if (bedrooms) filter.bedrooms = parseInt(bedrooms);
+    if (search) filter.$text = { $search: search };
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const [properties, total] = await Promise.all([
+      Property.find(filter)
+        .sort(sort)
+        .skip(skip)
+        .limit(parseInt(limit))
+        .populate("postedBy", "name phone")
+        .lean(),
+      Property.countDocuments(filter),
+    ]);
+
+    // Map _id to id for frontend compatibility
+    const mapped = properties.map((p) => ({
+      ...p,
+      id: p._id.toString(),
+    }));
+
+    return res.json({
+      properties: mapped,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit)),
+      },
+    });
+  } catch (error) {
+    console.error("List admin properties error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -179,5 +238,41 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// ─── POST /api/properties/public ────────────────────────────────
+// Create property (public submission queue)
+router.post(
+  "/public",
+  [
+    body("title").trim().notEmpty().withMessage("Title is required"),
+    body("price").trim().notEmpty().withMessage("Price is required"),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ error: errors.array()[0].msg });
+      }
+
+      const propertyData = {
+        ...req.body,
+        published: false,
+        verified: false,
+        postedBy: null, // Public user
+        postedDate: new Date().toISOString(),
+      };
+
+      const property = await Property.create(propertyData);
+
+      return res.status(201).json({
+        message: "Property submitted successfully and is pending approval",
+        property: { ...property.toObject(), id: property._id.toString() },
+      });
+    } catch (error) {
+      console.error("Create public property error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
 
 module.exports = router;
