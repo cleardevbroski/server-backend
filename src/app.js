@@ -10,6 +10,7 @@ const propertyRoutes = require("./routes/properties");
 const dealerRoutes = require("./routes/dealers");
 const builderRoutes = require("./routes/builders");
 const heroRoutes = require("./routes/hero");
+const leadRoutes = require("./routes/leads");
 
 const app = express();
 
@@ -45,6 +46,7 @@ app.use("/api/dealers", dealerRoutes);
 app.use("/api/builders", builderRoutes);
 app.use("/api/hero", heroRoutes);
 app.use("/api/cms", require("./routes/cms"));
+app.use("/api/leads", leadRoutes);
 
 // Health check
 app.get("/api/health", (req, res) => {
