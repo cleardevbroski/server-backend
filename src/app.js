@@ -9,6 +9,7 @@ const authRoutes = require("./routes/auth");
 const propertyRoutes = require("./routes/properties");
 const dealerRoutes = require("./routes/dealers");
 const builderRoutes = require("./routes/builders");
+const heroRoutes = require("./routes/hero");
 
 const app = express();
 
@@ -42,6 +43,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/properties", propertyRoutes);
 app.use("/api/dealers", dealerRoutes);
 app.use("/api/builders", builderRoutes);
+app.use("/api/hero", heroRoutes);
 app.use("/api/cms", require("./routes/cms"));
 
 // Health check
