@@ -7,6 +7,7 @@ const rateLimit = require("express-rate-limit");
 
 const authRoutes = require("./routes/auth");
 const propertyRoutes = require("./routes/properties");
+const dealerRoutes = require("./routes/dealers");
 
 const app = express();
 
@@ -38,6 +39,7 @@ app.use(
 // ─── Routes ─────────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);
 app.use("/api/properties", propertyRoutes);
+app.use("/api/dealers", dealerRoutes);
 app.use("/api/cms", require("./routes/cms"));
 
 // Health check
