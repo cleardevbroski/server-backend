@@ -29,8 +29,8 @@ router.get("/", async (req, res) => {
     if (bedrooms) filter.bedrooms = parseInt(bedrooms);
     if (search) filter.$text = { $search: search };
     
-    // Public search should only return published properties
-    filter.published = true;
+    // Public search returns only approved listings (legacy docs without status count as approved)
+    filter.$or = [{ status: "approved" }, { status: { $exists: false }, published: { $ne: false } }];
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -258,6 +258,7 @@ router.post(
         ...req.body,
         published: false,
         verified: false,
+        status: "pending",
         postedBy: null, // Public user
         postedDate: new Date().toISOString(),
       };

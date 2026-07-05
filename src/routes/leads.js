@@ -116,7 +116,7 @@ router.patch(
   "/:id/status",
   auth,
   adminOnly,
-  [body("status").isIn(["new", "contacted", "closed"]).withMessage("Invalid status")],
+  [body("status").isIn(["pending", "approved", "rejected"]).withMessage("Invalid status")],
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -144,5 +144,18 @@ router.patch(
     }
   },
 );
+
+// DELETE /api/leads/:id (admin only)
+router.delete("/:id", auth, adminOnly, async (req, res) => {
+  try {
+    const lead = await Lead.findByIdAndDelete(req.params.id);
+    if (!lead) return res.status(404).json({ error: "Lead not found" });
+    return res.json({ message: "Lead deleted successfully" });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Lead not found" });
+    console.error("Delete lead error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 module.exports = router;

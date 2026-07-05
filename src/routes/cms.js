@@ -9,7 +9,9 @@ const adminOnly = require("../middleware/adminOnly");
 
 router.get("/testimonials", async (req, res) => {
   try {
-    const testimonials = await Testimonial.find().sort({ createdAt: -1 });
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
+    const testimonials = await Testimonial.find(filter).sort({ createdAt: -1 });
     res.json(testimonials);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch testimonials" });
@@ -49,7 +51,9 @@ router.delete("/testimonials/:id", auth, adminOnly, async (req, res) => {
 
 router.get("/lawyers", async (req, res) => {
   try {
-    const lawyers = await Lawyer.find().sort({ createdAt: -1 });
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
+    const lawyers = await Lawyer.find(filter).sort({ createdAt: -1 });
     res.json(lawyers);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch lawyers" });
@@ -90,7 +94,9 @@ const Insight = require("../models/Insight");
 
 router.get("/insights", async (req, res) => {
   try {
-    const insights = await Insight.find().sort({ createdAt: -1 });
+    const filter = {};
+    if (req.query.status) filter.status = req.query.status;
+    const insights = await Insight.find(filter).sort({ createdAt: -1 });
     res.json(insights);
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch insights" });

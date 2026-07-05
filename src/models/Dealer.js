@@ -19,6 +19,7 @@ const dealerSchema = new mongoose.Schema(
     rating: { type: Number, default: 0, min: 0, max: 5 },
     verified: { type: Boolean, default: false },
     featured: { type: Boolean, default: false },
+    status: { type: String, enum: ["pending", "approved", "rejected"], default: "approved" },
   },
   { timestamps: true }
 );

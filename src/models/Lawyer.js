@@ -9,6 +9,7 @@ const lawyerSchema = new mongoose.Schema(
     cases: { type: String, required: true },
     specialty: { type: String, required: true },
     image: { type: String, default: "" },
+    status: { type: String, enum: ["pending", "approved", "rejected"], default: "approved" },
   },
   {
     timestamps: true,

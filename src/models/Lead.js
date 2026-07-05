@@ -8,7 +8,7 @@ const leadSchema = new mongoose.Schema(
     phone: { type: String, default: "", trim: true },
     message: { type: String, default: "" },
     category: { type: String, default: "" },
-    status: { type: String, enum: ["new", "contacted", "closed"], default: "new" },
+    status: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
   },
   { timestamps: true },
 );

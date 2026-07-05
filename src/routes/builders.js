@@ -18,6 +18,7 @@ router.get("/", async (req, res) => {
     if (featured !== undefined) filter.featured = featured === "true";
     if (verified !== undefined) filter.verified = verified === "true";
     if (search) filter.name = new RegExp(search, "i");
+    if (req.query.status) filter.status = req.query.status;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const resolvedSort = SORT_ALIASES[sort] || sort;
