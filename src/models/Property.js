@@ -62,6 +62,8 @@ const propertySchema = new mongoose.Schema(
 
     reraRegistered: { type: Boolean, default: false },
     verified: { type: Boolean, default: false },
+    published: { type: Boolean, default: true },
+    featured: { type: Boolean, default: false },
     postedDate: { type: String, default: () => new Date().toISOString() },
 
     // Who posted this property

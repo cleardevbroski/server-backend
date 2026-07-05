@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const Testimonial = require("../models/Testimonial");
 const Lawyer = require("../models/Lawyer");
+const auth = require("../middleware/auth");
+const adminOnly = require("../middleware/adminOnly");
 
 // ─── TESTIMONIALS ─────────────────────────────────────────────────────────
 
@@ -14,17 +16,18 @@ router.get("/testimonials", async (req, res) => {
   }
 });
 
-router.post("/testimonials", async (req, res) => {
+router.post("/testimonials", auth, adminOnly, async (req, res) => {
   try {
     const testimonial = new Testimonial(req.body);
     await testimonial.save();
     res.status(201).json(testimonial);
   } catch (error) {
+    console.error("TESTIMONIAL ERROR:", error);
     res.status(500).json({ error: "Failed to create testimonial" });
   }
 });
 
-router.put("/testimonials/:id", async (req, res) => {
+router.put("/testimonials/:id", auth, adminOnly, async (req, res) => {
   try {
     const testimonial = await Testimonial.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(testimonial);
@@ -33,7 +36,7 @@ router.put("/testimonials/:id", async (req, res) => {
   }
 });
 
-router.delete("/testimonials/:id", async (req, res) => {
+router.delete("/testimonials/:id", auth, adminOnly, async (req, res) => {
   try {
     await Testimonial.findByIdAndDelete(req.params.id);
     res.json({ message: "Testimonial deleted" });
@@ -53,7 +56,7 @@ router.get("/lawyers", async (req, res) => {
   }
 });
 
-router.post("/lawyers", async (req, res) => {
+router.post("/lawyers", auth, adminOnly, async (req, res) => {
   try {
     const lawyer = new Lawyer(req.body);
     await lawyer.save();
@@ -63,7 +66,7 @@ router.post("/lawyers", async (req, res) => {
   }
 });
 
-router.put("/lawyers/:id", async (req, res) => {
+router.put("/lawyers/:id", auth, adminOnly, async (req, res) => {
   try {
     const lawyer = await Lawyer.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(lawyer);
@@ -72,7 +75,7 @@ router.put("/lawyers/:id", async (req, res) => {
   }
 });
 
-router.delete("/lawyers/:id", async (req, res) => {
+router.delete("/lawyers/:id", auth, adminOnly, async (req, res) => {
   try {
     await Lawyer.findByIdAndDelete(req.params.id);
     res.json({ message: "Lawyer deleted" });
@@ -94,7 +97,7 @@ router.get("/insights", async (req, res) => {
   }
 });
 
-router.post("/insights", async (req, res) => {
+router.post("/insights", auth, adminOnly, async (req, res) => {
   try {
     const insight = new Insight(req.body);
     await insight.save();
@@ -104,7 +107,7 @@ router.post("/insights", async (req, res) => {
   }
 });
 
-router.put("/insights/:id", async (req, res) => {
+router.put("/insights/:id", auth, adminOnly, async (req, res) => {
   try {
     const insight = await Insight.findByIdAndUpdate(req.params.id, req.body, { new: true });
     res.json(insight);
@@ -113,7 +116,7 @@ router.put("/insights/:id", async (req, res) => {
   }
 });
 
-router.delete("/insights/:id", async (req, res) => {
+router.delete("/insights/:id", auth, adminOnly, async (req, res) => {
   try {
     await Insight.findByIdAndDelete(req.params.id);
     res.json({ message: "Insight deleted" });
