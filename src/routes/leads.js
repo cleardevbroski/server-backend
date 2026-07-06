@@ -116,7 +116,7 @@ router.patch(
   "/:id/status",
   auth,
   adminOnly,
-  [body("status").isIn(["pending", "approved", "rejected"]).withMessage("Invalid status")],
+  [body("status").isIn(["new", "contacted", "closed"]).withMessage("Invalid status")],
   async (req, res) => {
     try {
       const errors = validationResult(req);

@@ -17,7 +17,7 @@ const propertySchema = new mongoose.Schema(
     // Which homepage carousel/section this belongs to
     websiteSection: { 
       type: String, 
-      enum: ["Handpicked", "Newly Launched", "Search Trends", "Offers", "Featured", "None"], 
+      enum: ["Handpicked", "Newly Launched", "Search Trends", "Offers", "Featured", "Recommended Insights", "None"], 
       default: "None" 
     },
 
