@@ -3,6 +3,7 @@ const { body, query, validationResult } = require("express-validator");
 const Property = require("../models/Property");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
+const { linkProperty, unlinkProperty, relinkProperty } = require("../services/propertyLinkSync");
 
 const router = express.Router();
 
@@ -170,6 +171,7 @@ router.post(
       };
 
       const property = await Property.create(propertyData);
+      await linkProperty(property);
 
       return res.status(201).json({
         message: "Property created successfully",
@@ -196,13 +198,20 @@ router.put(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
+      const existing = await Property.findById(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: "Property not found" });
+      }
+
       const property = await Property.findByIdAndUpdate(req.params.id, req.body, {
         new: true,
         runValidators: true,
       });
 
-      if (!property) {
-        return res.status(404).json({ error: "Property not found" });
+      if ("builderId" in req.body || "dealerId" in req.body) {
+        const nextBuilderId = "builderId" in req.body ? req.body.builderId : existing.builderId;
+        const nextDealerId = "dealerId" in req.body ? req.body.dealerId : existing.dealerId;
+        await relinkProperty(existing, nextBuilderId, nextDealerId);
       }
 
       return res.json({
@@ -228,6 +237,8 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
     if (!property) {
       return res.status(404).json({ error: "Property not found" });
     }
+
+    await unlinkProperty(property);
 
     return res.json({ message: "Property deleted successfully" });
   } catch (error) {

@@ -74,3 +74,91 @@ describe("propertyLinkSync", () => {
     expect(updatedB.propertyIds.map(String)).toContain(property._id.toString());
   });
 });
+
+describe("Property routes — builder/dealer linkage", () => {
+  it("POST /api/properties links the new property to its builder and dealer", async () => {
+    const { token } = await createAdminToken();
+    const builder = await Builder.create({ name: "Brigade", slug: "brigade" });
+    const dealer = await Dealer.create({ name: "Karvy", slug: "karvy" });
+
+    const res = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ title: "P", price: "1", builderId: builder._id.toString(), dealerId: dealer._id.toString() });
+
+    expect(res.status).toBe(201);
+    const updatedBuilder = await Builder.findById(builder._id);
+    const updatedDealer = await Dealer.findById(dealer._id);
+    expect(updatedBuilder.projectCount).toBe(1);
+    expect(updatedDealer.propertyIds.map(String)).toContain(res.body.property.id);
+  });
+
+  it("PUT /api/properties/:id moves the dealer link when dealerId changes", async () => {
+    const { token } = await createAdminToken();
+    const dealerA = await Dealer.create({ name: "A", slug: "dealer-a2" });
+    const dealerB = await Dealer.create({ name: "B", slug: "dealer-b2" });
+    const property = await Property.create({ title: "P", price: "1", dealerId: dealerA._id });
+    await Dealer.findByIdAndUpdate(dealerA._id, { $addToSet: { propertyIds: property._id } });
+
+    const res = await request(app)
+      .put(`/api/properties/${property._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ dealerId: dealerB._id.toString() });
+
+    expect(res.status).toBe(200);
+    const updatedA = await Dealer.findById(dealerA._id);
+    const updatedB = await Dealer.findById(dealerB._id);
+    expect(updatedA.propertyIds.map(String)).not.toContain(property._id.toString());
+    expect(updatedB.propertyIds.map(String)).toContain(property._id.toString());
+  });
+
+  it("PUT /api/properties/:id clears the builder link when builderId is explicitly set to null", async () => {
+    const { token } = await createAdminToken();
+    const builder = await Builder.create({ name: "Sattva", slug: "sattva", projectCount: 1 });
+    const property = await Property.create({ title: "P", price: "1", builderId: builder._id });
+
+    const res = await request(app)
+      .put(`/api/properties/${property._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ builderId: null });
+
+    expect(res.status).toBe(200);
+    expect(res.body.property.builderId).toBeNull();
+    const updatedBuilder = await Builder.findById(builder._id);
+    expect(updatedBuilder.projectCount).toBe(0);
+  });
+
+  it("PUT /api/properties/:id leaves the builder link untouched when builderId is omitted from the request", async () => {
+    const { token } = await createAdminToken();
+    const builder = await Builder.create({ name: "Assetz", slug: "assetz", projectCount: 1 });
+    const property = await Property.create({ title: "P", price: "1", builderId: builder._id });
+
+    const res = await request(app)
+      .put(`/api/properties/${property._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ title: "P updated" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.property.builderId).toBe(builder._id.toString());
+    const updatedBuilder = await Builder.findById(builder._id);
+    expect(updatedBuilder.projectCount).toBe(1);
+  });
+
+  it("DELETE /api/properties/:id unlinks the property from its builder and dealer", async () => {
+    const { token } = await createAdminToken();
+    const builder = await Builder.create({ name: "Purva", slug: "purva", projectCount: 1 });
+    const dealer = await Dealer.create({ name: "C", slug: "dealer-c" });
+    const property = await Property.create({ title: "P", price: "1", builderId: builder._id, dealerId: dealer._id });
+    await Dealer.findByIdAndUpdate(dealer._id, { $addToSet: { propertyIds: property._id } });
+
+    const res = await request(app)
+      .delete(`/api/properties/${property._id}`)
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const updatedBuilder = await Builder.findById(builder._id);
+    const updatedDealer = await Dealer.findById(dealer._id);
+    expect(updatedBuilder.projectCount).toBe(0);
+    expect(updatedDealer.propertyIds.map(String)).not.toContain(property._id.toString());
+  });
+});
