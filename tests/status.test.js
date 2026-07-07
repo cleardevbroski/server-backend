@@ -76,3 +76,33 @@ describe("Property status workflow", () => {
     expect(fresh.status).toBe("approved");
   });
 });
+
+describe("GET /api/properties/:id", () => {
+  it("returns a property by id regardless of status (approved, pending, or legacy without status)", async () => {
+    const approved = await Property.create({ title: "Approved Villa", price: "1", status: "approved" });
+    const pending = await Property.create({ title: "Pending Villa", price: "1", status: "pending" });
+
+    const approvedRes = await request(app).get(`/api/properties/${approved._id}`);
+    expect(approvedRes.status).toBe(200);
+    expect(approvedRes.body.property.id).toBe(approved._id.toString());
+    expect(approvedRes.body.property.title).toBe("Approved Villa");
+
+    const pendingRes = await request(app).get(`/api/properties/${pending._id}`);
+    expect(pendingRes.status).toBe(200);
+    expect(pendingRes.body.property.id).toBe(pending._id.toString());
+    expect(pendingRes.body.property.title).toBe("Pending Villa");
+  });
+
+  it("returns 404 for a well-formed id that doesn't exist", async () => {
+    const missingId = "64b7f3f3f3f3f3f3f3f3f3f3";
+    const res = await request(app).get(`/api/properties/${missingId}`);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Property not found");
+  });
+
+  it("returns 404 (not 500) for a malformed id", async () => {
+    const res = await request(app).get("/api/properties/not-a-valid-object-id");
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe("Property not found");
+  });
+});

@@ -4,9 +4,10 @@ const { MongoMemoryServer } = require("mongodb-memory-server");
 let mongod;
 
 beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
+  // mongod can take >10s to boot on slower/contended machines; default launch timeout is 10s
+  mongod = await MongoMemoryServer.create({ instance: { launchTimeout: 120000 } });
   await mongoose.connect(mongod.getUri());
-});
+}, 120000);
 
 afterEach(async () => {
   const collections = mongoose.connection.collections;

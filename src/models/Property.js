@@ -31,6 +31,8 @@ const propertySchema = new mongoose.Schema(
     facing: { type: String, default: "" },
     floor: { type: String, default: "" },
     transactionType: { type: String, default: "" },
+    listingType: { type: String, enum: ["For Sale", "For Rent"], default: "For Sale" },
+    submittedBy: { type: String, enum: ["user", "admin"], default: "admin" },
     ageOfProperty: { type: String, default: "" },
     images: [{ type: String }],
     videos: [{ type: String }],
