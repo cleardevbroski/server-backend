@@ -1,7 +1,7 @@
 const express = require("express");
 const { body, validationResult } = require("express-validator");
 const Builder = require("../models/Builder");
-const Property = require("../models/Property");
+const { unsetBuilderRef } = require("../services/propertyLinkSync");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 
@@ -160,7 +160,7 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
     if (!builder) {
       return res.status(404).json({ error: "Builder not found" });
     }
-    await Property.updateMany({ builderId: builder._id }, { $unset: { builderId: 1 } });
+    await unsetBuilderRef(builder._id);
     return res.json({ message: "Builder deleted successfully" });
   } catch (error) {
     if (error.name === "CastError") {

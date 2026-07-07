@@ -208,6 +208,10 @@ router.put(
         runValidators: true,
       });
 
+      if (!property) {
+        return res.status(404).json({ error: "Property not found" });
+      }
+
       if ("builderId" in req.body || "dealerId" in req.body) {
         const nextBuilderId = "builderId" in req.body ? req.body.builderId : existing.builderId;
         const nextDealerId = "dealerId" in req.body ? req.body.dealerId : existing.dealerId;
