@@ -162,3 +162,33 @@ describe("Property routes — builder/dealer linkage", () => {
     expect(updatedDealer.propertyIds.map(String)).not.toContain(property._id.toString());
   });
 });
+
+describe("Builder/Dealer delete — referential integrity", () => {
+  it("DELETE /api/builders/:id unsets builderId on properties that referenced it", async () => {
+    const { token } = await createAdminToken();
+    const builder = await Builder.create({ name: "Mantri", slug: "mantri" });
+    const property = await Property.create({ title: "P", price: "1", builderId: builder._id });
+
+    const res = await request(app)
+      .delete(`/api/builders/${builder._id}`)
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const updatedProperty = await Property.findById(property._id);
+    expect(updatedProperty.builderId).toBeFalsy();
+  });
+
+  it("DELETE /api/dealers/:id unsets dealerId on properties that referenced it", async () => {
+    const { token } = await createAdminToken();
+    const dealer = await Dealer.create({ name: "D", slug: "dealer-d" });
+    const property = await Property.create({ title: "P", price: "1", dealerId: dealer._id });
+
+    const res = await request(app)
+      .delete(`/api/dealers/${dealer._id}`)
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    const updatedProperty = await Property.findById(property._id);
+    expect(updatedProperty.dealerId).toBeFalsy();
+  });
+});

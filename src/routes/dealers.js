@@ -1,6 +1,7 @@
 const express = require("express");
 const { body, validationResult } = require("express-validator");
 const Dealer = require("../models/Dealer");
+const Property = require("../models/Property");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 
@@ -156,6 +157,7 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
     if (!dealer) {
       return res.status(404).json({ error: "Dealer not found" });
     }
+    await Property.updateMany({ dealerId: dealer._id }, { $unset: { dealerId: 1 } });
     return res.json({ message: "Dealer deleted successfully" });
   } catch (error) {
     if (error.name === "CastError") {
