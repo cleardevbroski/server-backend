@@ -74,6 +74,10 @@ const propertySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+
+    // Relational links set by an admin (null = unlinked; falls back to free-text `builder` / dealer heuristics)
+    builderId: { type: mongoose.Schema.Types.ObjectId, ref: "Builder", default: null },
+    dealerId: { type: mongoose.Schema.Types.ObjectId, ref: "Dealer", default: null },
   },
   {
     timestamps: true,
