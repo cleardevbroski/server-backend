@@ -119,7 +119,7 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
         .sort(sort)
         .skip(skip)
         .limit(parseInt(limit))
-        .populate("postedBy", "name phone")
+        .populate("postedBy", "name phone role")
         .lean(),
       Property.countDocuments(filter).collation(collation),
     ]);
