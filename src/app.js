@@ -28,7 +28,9 @@ app.use(
     credentials: true,
   })
 );
-app.use(express.json({ limit: "50mb" }));
+// 10mb: allows base64 image payloads (<=5MB each) while staying under MongoDB's
+// 16MB BSON document limit and capping storage/bandwidth abuse on public routes.
+app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
 // ─── Global API rate limit (100 req/min per IP) ────────────────
