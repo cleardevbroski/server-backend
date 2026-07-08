@@ -26,6 +26,9 @@ router.get("/", searchLimiter, async (req, res) => {
       if (max) filter.priceValue.$lte = parseInt(max);
     }
 
+    // Public search returns only approved listings (legacy docs without status count as approved)
+    filter.$or = [{ status: "approved" }, { status: { $exists: false }, published: { $ne: false } }];
+
     // Clamp limit — properties embed base64 media, so unbounded pages are a DoS vector
     const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
     const skip = (parseInt(page) - 1) * limitNum;
