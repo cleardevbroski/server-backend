@@ -4,8 +4,19 @@ const Property = require("../models/Property");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const { linkProperty, unlinkProperty, relinkProperty } = require("../services/propertyLinkSync");
+const { uploadIfBase64, uploadArrayIfBase64 } = require("../utils/mediaUpload");
 
 const router = express.Router();
+
+async function convertPropertyMedia(body) {
+  const [image, images, videos, brochure] = await Promise.all([
+    uploadIfBase64(body.image, { resourceType: "image", folder: "clear-title/properties" }),
+    uploadArrayIfBase64(body.images, { resourceType: "image", folder: "clear-title/properties" }),
+    uploadArrayIfBase64(body.videos, { resourceType: "video", folder: "clear-title/properties/videos" }),
+    uploadIfBase64(body.brochure, { resourceType: "raw", folder: "clear-title/properties/brochures" }),
+  ]);
+  return { ...body, image, images, videos, brochure };
+}
 
 // ─── GET /api/properties ────────────────────────────────────────
 // List properties (public, with optional filters & pagination)
@@ -194,7 +205,7 @@ router.post(
       }
 
       const propertyData = {
-        ...req.body,
+        ...(await convertPropertyMedia(req.body)),
         postedBy: req.user._id,
         postedDate: new Date().toISOString(),
       };
@@ -232,10 +243,11 @@ router.put(
         return res.status(404).json({ error: "Property not found" });
       }
 
-      const property = await Property.findByIdAndUpdate(req.params.id, req.body, {
-        new: true,
-        runValidators: true,
-      });
+      const property = await Property.findByIdAndUpdate(
+        req.params.id,
+        await convertPropertyMedia(req.body),
+        { new: true, runValidators: true }
+      );
 
       if (!property) {
         return res.status(404).json({ error: "Property not found" });
@@ -299,7 +311,7 @@ router.post(
       }
 
       const propertyData = {
-        ...req.body,
+        ...(await convertPropertyMedia(req.body)),
         published: false,
         verified: false,
         status: "pending",
