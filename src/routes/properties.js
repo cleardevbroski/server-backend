@@ -33,16 +33,21 @@ router.get("/", async (req, res) => {
     // Public search returns only approved listings (legacy docs without status count as approved)
     filter.$or = [{ status: "approved" }, { status: { $exists: false }, published: { $ne: false } }];
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    // Clamp limit — properties embed base64 media, so unbounded pages are a DoS vector
+    const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
+    const skip = (parseInt(page) - 1) * limitNum;
     // city/propertyType are exact but case-insensitive — request the index collation so the query stays index-backed.
     const collation = city || propertyType ? Property.CI_COLLATION : undefined;
 
     const [properties, total] = await Promise.all([
       Property.find(filter)
         .collation(collation)
+        // Exclude heavy base64 media from list responses; keep first image as cover thumbnail
+        .select("-videos -brochure")
+        .slice("images", 1)
         .sort(sort)
         .skip(skip)
-        .limit(parseInt(limit))
+        .limit(limitNum)
         .populate("postedBy", "name phone")
         .lean(),
       Property.countDocuments(filter).collation(collation),
@@ -58,9 +63,9 @@ router.get("/", async (req, res) => {
       properties: mapped,
       pagination: {
         page: parseInt(page),
-        limit: parseInt(limit),
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / parseInt(limit)),
+        pages: Math.ceil(total / limitNum),
       },
     });
   } catch (error) {
@@ -98,6 +103,9 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
     const [properties, total] = await Promise.all([
       Property.find(filter)
         .collation(collation)
+        // Exclude heavy base64 media from list responses; keep first image as cover thumbnail
+        .select("-videos -brochure")
+        .slice("images", 1)
         .sort(sort)
         .skip(skip)
         .limit(parseInt(limit))
