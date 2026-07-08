@@ -198,8 +198,18 @@ router.post(
 
       const { phone } = req.body;
 
+      // Reserved super-admin phone — never allow the unverified bypass to claim it
+      if (phone === "9999999999") {
+        return res.status(403).json({ error: "This phone number cannot be used for Truecaller login" });
+      }
+
       // Find or create user
       let user = await User.findOne({ phone });
+
+      // Never mint privileged tokens from an unverified client-supplied phone
+      if (user && user.role === "admin") {
+        return res.status(403).json({ error: "Truecaller login is not available for admin accounts" });
+      }
 
       if (!user) {
         user = await User.create({ phone, isVerified: true });
