@@ -29,6 +29,11 @@ router.get("/", async (req, res) => {
     if (propertyType) filter.propertyType = propertyType;
     if (bedrooms) filter.bedrooms = parseInt(bedrooms);
     if (search) filter.$text = { $search: search };
+    if (minPrice || maxPrice) {
+      filter.priceValue = {};
+      if (minPrice) filter.priceValue.$gte = Number(minPrice);
+      if (maxPrice) filter.priceValue.$lte = Number(maxPrice);
+    }
 
     // Public search returns only approved listings (legacy docs without status count as approved)
     filter.$or = [{ status: "approved" }, { status: { $exists: false }, published: { $ne: false } }];
@@ -96,6 +101,11 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
     if (propertyType) filter.propertyType = propertyType;
     if (bedrooms) filter.bedrooms = parseInt(bedrooms);
     if (search) filter.$text = { $search: search };
+    if (minPrice || maxPrice) {
+      filter.priceValue = {};
+      if (minPrice) filter.priceValue.$gte = Number(minPrice);
+      if (maxPrice) filter.priceValue.$lte = Number(maxPrice);
+    }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const collation = city || propertyType ? Property.CI_COLLATION : undefined;
