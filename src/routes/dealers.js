@@ -4,6 +4,7 @@ const Dealer = require("../models/Dealer");
 const { unsetDealerRef } = require("../services/propertyLinkSync");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
+const { uploadIfBase64 } = require("../utils/mediaUpload");
 
 const router = express.Router();
 
@@ -80,7 +81,10 @@ router.post(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
-      const dealer = await Dealer.create(req.body);
+      const dealer = await Dealer.create({
+        ...req.body,
+        logo: await uploadIfBase64(req.body.logo, { resourceType: "image", folder: "clear-title/dealers" }),
+      });
 
       return res.status(201).json({
         message: "Dealer created successfully",
@@ -109,10 +113,14 @@ router.put(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
-      const dealer = await Dealer.findByIdAndUpdate(req.params.id, req.body, {
-        new: true,
-        runValidators: true,
-      });
+      const dealer = await Dealer.findByIdAndUpdate(
+        req.params.id,
+        {
+          ...req.body,
+          logo: await uploadIfBase64(req.body.logo, { resourceType: "image", folder: "clear-title/dealers" }),
+        },
+        { new: true, runValidators: true }
+      );
 
       if (!dealer) {
         return res.status(404).json({ error: "Dealer not found" });

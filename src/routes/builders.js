@@ -4,6 +4,7 @@ const Builder = require("../models/Builder");
 const { unsetBuilderRef } = require("../services/propertyLinkSync");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
+const { uploadIfBase64 } = require("../utils/mediaUpload");
 
 const router = express.Router();
 
@@ -83,7 +84,10 @@ router.post(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
-      const builder = await Builder.create(req.body);
+      const builder = await Builder.create({
+        ...req.body,
+        logo: await uploadIfBase64(req.body.logo, { resourceType: "image", folder: "clear-title/builders" }),
+      });
 
       return res.status(201).json({
         message: "Builder created successfully",
@@ -112,10 +116,14 @@ router.put(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
-      const builder = await Builder.findByIdAndUpdate(req.params.id, req.body, {
-        new: true,
-        runValidators: true,
-      });
+      const builder = await Builder.findByIdAndUpdate(
+        req.params.id,
+        {
+          ...req.body,
+          logo: await uploadIfBase64(req.body.logo, { resourceType: "image", folder: "clear-title/builders" }),
+        },
+        { new: true, runValidators: true }
+      );
 
       if (!builder) {
         return res.status(404).json({ error: "Builder not found" });

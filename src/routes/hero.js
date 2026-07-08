@@ -3,6 +3,7 @@ const { body, validationResult } = require("express-validator");
 const HeroBanner = require("../models/HeroBanner");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
+const { uploadIfBase64 } = require("../utils/mediaUpload");
 
 const router = express.Router();
 
@@ -33,7 +34,11 @@ router.post(
       if (!errors.isEmpty()) {
         return res.status(400).json({ error: errors.array()[0].msg });
       }
-      const banner = await HeroBanner.create(req.body);
+      const banner = await HeroBanner.create({
+        ...req.body,
+        image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/hero" }),
+        logo: await uploadIfBase64(req.body.logo, { resourceType: "image", folder: "clear-title/hero" }),
+      });
       return res.status(201).json({
         message: "Hero banner created successfully",
         banner: { ...banner.toObject(), id: banner._id.toString() },
@@ -57,10 +62,15 @@ router.put(
       if (!errors.isEmpty()) {
         return res.status(400).json({ error: errors.array()[0].msg });
       }
-      const banner = await HeroBanner.findByIdAndUpdate(req.params.id, req.body, {
-        new: true,
-        runValidators: true,
-      });
+      const banner = await HeroBanner.findByIdAndUpdate(
+        req.params.id,
+        {
+          ...req.body,
+          image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/hero" }),
+          logo: await uploadIfBase64(req.body.logo, { resourceType: "image", folder: "clear-title/hero" }),
+        },
+        { new: true, runValidators: true }
+      );
       if (!banner) {
         return res.status(404).json({ error: "Hero banner not found" });
       }

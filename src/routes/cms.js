@@ -4,6 +4,7 @@ const Testimonial = require("../models/Testimonial");
 const Lawyer = require("../models/Lawyer");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
+const { uploadIfBase64 } = require("../utils/mediaUpload");
 
 // ─── TESTIMONIALS ─────────────────────────────────────────────────────────
 
@@ -62,7 +63,10 @@ router.get("/lawyers", async (req, res) => {
 
 router.post("/lawyers", auth, adminOnly, async (req, res) => {
   try {
-    const lawyer = new Lawyer(req.body);
+    const lawyer = new Lawyer({
+      ...req.body,
+      image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/lawyers" }),
+    });
     await lawyer.save();
     res.status(201).json(lawyer);
   } catch (error) {
@@ -72,7 +76,14 @@ router.post("/lawyers", auth, adminOnly, async (req, res) => {
 
 router.put("/lawyers/:id", auth, adminOnly, async (req, res) => {
   try {
-    const lawyer = await Lawyer.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const lawyer = await Lawyer.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...req.body,
+        image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/lawyers" }),
+      },
+      { new: true }
+    );
     res.json(lawyer);
   } catch (error) {
     res.status(500).json({ error: "Failed to update lawyer" });
@@ -105,7 +116,10 @@ router.get("/insights", async (req, res) => {
 
 router.post("/insights", auth, adminOnly, async (req, res) => {
   try {
-    const insight = new Insight(req.body);
+    const insight = new Insight({
+      ...req.body,
+      image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/insights" }),
+    });
     await insight.save();
     res.status(201).json(insight);
   } catch (error) {
@@ -115,7 +129,14 @@ router.post("/insights", auth, adminOnly, async (req, res) => {
 
 router.put("/insights/:id", auth, adminOnly, async (req, res) => {
   try {
-    const insight = await Insight.findByIdAndUpdate(req.params.id, req.body, { new: true });
+    const insight = await Insight.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...req.body,
+        image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/insights" }),
+      },
+      { new: true }
+    );
     res.json(insight);
   } catch (error) {
     res.status(500).json({ error: "Failed to update insight" });
