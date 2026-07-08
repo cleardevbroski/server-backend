@@ -84,6 +84,29 @@ const propertySchema = new mongoose.Schema(
   }
 );
 
+// Derive numeric priceValue from the display price string (e.g. "₹1.2 Cr", "85 L", "4500000")
+function parsePriceValue(price) {
+  const m = String(price || "")
+    .replace(/,/g, "")
+    .match(/(\d+(?:\.\d+)?)\s*(cr|crore|l|lac|lakh)?/i);
+  if (!m) return 0;
+  const num = parseFloat(m[1]);
+  if (!Number.isFinite(num)) return 0;
+  const unit = (m[2] || "").toLowerCase();
+  if (unit.startsWith("cr")) return Math.round(num * 1e7);
+  if (unit.startsWith("l")) return Math.round(num * 1e5);
+  return Math.round(num);
+}
+
+// Keep priceValue in sync with price so /api/search range filters work on real data.
+// An explicitly set priceValue still wins (isModified is false for schema defaults).
+propertySchema.pre("save", function (next) {
+  if (this.isModified("price") && !this.isModified("priceValue")) {
+    this.priceValue = parsePriceValue(this.price);
+  }
+  next();
+});
+
 // Text index for search
 propertySchema.index({ title: "text", subtitle: "text", description: "text" });
 

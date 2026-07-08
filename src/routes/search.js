@@ -20,10 +20,12 @@ router.get("/", searchLimiter, async (req, res) => {
     if (city) filter["locality.city"] = city;
     if (type) filter.propertyType = type;
     if (bhk) filter.bedrooms = parseInt(bhk);
-    if (min || max) {
+    const minNum = parseInt(min);
+    const maxNum = parseInt(max);
+    if (Number.isFinite(minNum) || Number.isFinite(maxNum)) {
       filter.priceValue = {};
-      if (min) filter.priceValue.$gte = parseInt(min);
-      if (max) filter.priceValue.$lte = parseInt(max);
+      if (Number.isFinite(minNum)) filter.priceValue.$gte = minNum;
+      if (Number.isFinite(maxNum)) filter.priceValue.$lte = maxNum;
     }
 
     // Public search returns only approved listings (legacy docs without status count as approved)
