@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const axios = require("axios");
 const Otp = require("../models/Otp");
 
@@ -5,7 +6,7 @@ const Otp = require("../models/Otp");
  * Generate a 6-digit numeric OTP
  */
 function generateOTP() {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 1000000).toString();
 }
 
 /**
@@ -77,12 +78,20 @@ async function createAndSendOTP(phone) {
  * Returns true if valid, false otherwise.
  */
 async function verifyOTP(phone, code) {
-  const otpDoc = await Otp.findOne({
-    phone,
-    verified: false,
-  }).sort({ _id: -1 });
+  // Atomic increment — prevents concurrent requests from bypassing the 5-attempt cap (DBG008)
+  const otpDoc = await Otp.findOneAndUpdate(
+    { phone, verified: false, attempts: { $lt: 5 } },
+    { $inc: { attempts: 1 } },
+    { sort: { _id: -1 }, new: true }
+  );
 
   if (!otpDoc) {
+    // Either no OTP exists, or attempts already >= 5
+    const exhausted = await Otp.findOne({ phone, verified: false, attempts: { $gte: 5 } });
+    if (exhausted) {
+      await Otp.deleteOne({ _id: exhausted._id });
+      return { valid: false, reason: "Too many attempts. Please request a new OTP." };
+    }
     return { valid: false, reason: "No OTP found. Please request a new one." };
   }
 
@@ -92,24 +101,13 @@ async function verifyOTP(phone, code) {
     return { valid: false, reason: "OTP has expired. Please request a new one." };
   }
 
-  // Check max attempts (prevent brute force)
-  if (otpDoc.attempts >= 5) {
-    await Otp.deleteOne({ _id: otpDoc._id });
-    return { valid: false, reason: "Too many attempts. Please request a new OTP." };
-  }
-
-  // Increment attempts
-  otpDoc.attempts += 1;
-
   // Check code
   if (otpDoc.code !== code) {
-    await otpDoc.save();
     return { valid: false, reason: "Invalid OTP. Please try again." };
   }
 
   // Success — mark as verified and clean up
-  otpDoc.verified = true;
-  await otpDoc.save();
+  await Otp.updateOne({ _id: otpDoc._id }, { verified: true });
   await Otp.deleteMany({ phone }); // Clean up all OTPs for this phone
 
   return { valid: true };

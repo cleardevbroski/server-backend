@@ -7,6 +7,11 @@ const adminOnly = require("../middleware/adminOnly");
 
 const router = express.Router();
 
+// Escape regex metacharacters to prevent ReDoS (CR005)
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 const SORT_ALIASES = { "-projects": "-projectCount", projects: "projectCount" };
 
 // GET /api/builders
@@ -15,17 +20,19 @@ router.get("/", async (req, res) => {
     const { page = 1, limit = 20, city, featured, verified, search, sort = "-createdAt" } = req.query;
 
     const filter = {};
-    if (city) filter.city = new RegExp(city, "i");
+    if (city) filter.city = new RegExp(escapeRegex(String(city)), "i");
     if (featured !== undefined) filter.featured = featured === "true";
     if (verified !== undefined) filter.verified = verified === "true";
-    if (search) filter.name = new RegExp(search, "i");
-    if (req.query.status) filter.status = req.query.status;
+    if (search) filter.name = new RegExp(escapeRegex(String(search)), "i");
+    if (req.query.status) filter.status = String(req.query.status);
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
+    const pageNum = Math.max(parseInt(page) || 1, 1);
+    const skip = (pageNum - 1) * limitNum;
     const resolvedSort = SORT_ALIASES[sort] || sort;
 
     const [builders, total] = await Promise.all([
-      Builder.find(filter).sort(resolvedSort).skip(skip).limit(parseInt(limit)).lean(),
+      Builder.find(filter).sort(resolvedSort).skip(skip).limit(limitNum).lean(),
       Builder.countDocuments(filter),
     ]);
 
@@ -34,10 +41,10 @@ router.get("/", async (req, res) => {
     return res.json({
       builders: mapped,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / parseInt(limit)),
+        pages: Math.ceil(total / limitNum),
       },
     });
   } catch (error) {

@@ -16,10 +16,10 @@ router.get("/", searchLimiter, async (req, res) => {
     const { q, city, type, min, max, bhk, sort = "-createdAt", page = 1, limit = 20 } = req.query;
 
     const filter = {};
-    if (q) filter.$text = { $search: q };
-    if (city) filter["locality.city"] = city;
-    if (type) filter.propertyType = type;
-    if (bhk) filter.bedrooms = parseInt(bhk);
+    if (q) filter.$text = { $search: String(q) };
+    if (city) filter["locality.city"] = String(city);
+    if (type) filter.propertyType = String(type);
+    if (bhk) { const b = parseInt(bhk); if (Number.isInteger(b)) filter.bedrooms = b; }
     const minNum = parseInt(min);
     const maxNum = parseInt(max);
     if (Number.isFinite(minNum) || Number.isFinite(maxNum)) {

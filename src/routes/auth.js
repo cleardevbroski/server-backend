@@ -1,4 +1,5 @@
 const express = require("express");
+const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
 const { body, validationResult } = require("express-validator");
 const rateLimit = require("express-rate-limit");
@@ -13,6 +14,15 @@ const otpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 5,
   message: { error: "Too many OTP requests. Please try again after 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limit admin login: max 5 per 15 minutes per IP (CR004)
+const adminLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: "Too many login attempts. Please try again after 15 minutes." },
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -248,6 +258,7 @@ router.post(
 // Dedicated admin login for the dashboard
 router.post(
   "/admin-login",
+  adminLoginLimiter,
   [
     body("username").trim().notEmpty(),
     body("password").notEmpty(),
@@ -257,10 +268,20 @@ router.post(
       const username = req.body.username?.trim();
       const password = req.body.password?.trim();
 
-      if (
-        username !== process.env.ADMIN_USERNAME ||
-        password !== process.env.ADMIN_PASSWORD
-      ) {
+      // Constant-time comparison to prevent timing attacks (CR004)
+      const expectedUser = process.env.ADMIN_USERNAME || "";
+      const expectedPass = process.env.ADMIN_PASSWORD || "";
+      const userBuf = Buffer.from(username || "");
+      const passBuf = Buffer.from(password || "");
+      const expectedUserBuf = Buffer.from(expectedUser);
+      const expectedPassBuf = Buffer.from(expectedPass);
+
+      const userMatch = userBuf.length === expectedUserBuf.length &&
+        crypto.timingSafeEqual(userBuf, expectedUserBuf);
+      const passMatch = passBuf.length === expectedPassBuf.length &&
+        crypto.timingSafeEqual(passBuf, expectedPassBuf);
+
+      if (!userMatch || !passMatch) {
         return res.status(401).json({ error: "Invalid admin credentials" });
       }
 

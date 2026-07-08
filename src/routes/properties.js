@@ -25,10 +25,10 @@ router.get("/", async (req, res) => {
 
     const filter = {};
 
-    if (city) filter["locality.city"] = city;
-    if (propertyType) filter.propertyType = propertyType;
-    if (bedrooms) filter.bedrooms = parseInt(bedrooms);
-    if (search) filter.$text = { $search: search };
+    if (city) filter["locality.city"] = String(city);
+    if (propertyType) filter.propertyType = String(propertyType);
+    if (bedrooms) { const b = parseInt(bedrooms); if (Number.isInteger(b)) filter.bedrooms = b; }
+    if (search) filter.$text = { $search: String(search) };
     if (minPrice || maxPrice) {
       filter.priceValue = {};
       if (minPrice) filter.priceValue.$gte = Number(minPrice);
@@ -97,17 +97,19 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
 
     const filter = {};
 
-    if (city) filter["locality.city"] = city;
-    if (propertyType) filter.propertyType = propertyType;
-    if (bedrooms) filter.bedrooms = parseInt(bedrooms);
-    if (search) filter.$text = { $search: search };
+    if (city) filter["locality.city"] = String(city);
+    if (propertyType) filter.propertyType = String(propertyType);
+    if (bedrooms) { const b = parseInt(bedrooms); if (Number.isInteger(b)) filter.bedrooms = b; }
+    if (search) filter.$text = { $search: String(search) };
     if (minPrice || maxPrice) {
       filter.priceValue = {};
       if (minPrice) filter.priceValue.$gte = Number(minPrice);
       if (maxPrice) filter.priceValue.$lte = Number(maxPrice);
     }
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
+    const pageNum = Math.max(parseInt(page) || 1, 1);
+    const skip = (pageNum - 1) * limitNum;
     const collation = city || propertyType ? Property.CI_COLLATION : undefined;
 
     const [properties, total] = await Promise.all([
@@ -118,7 +120,7 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
         .slice("images", 1)
         .sort(sort)
         .skip(skip)
-        .limit(parseInt(limit))
+        .limit(limitNum)
         .populate("postedBy", "name phone role")
         .lean(),
       Property.countDocuments(filter).collation(collation),
@@ -133,10 +135,10 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
     return res.json({
       properties: mapped,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / parseInt(limit)),
+        pages: Math.ceil(total / limitNum),
       },
     });
   } catch (error) {
@@ -145,11 +147,15 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
   }
 });
 
-// ─── GET /api/properties/:id ────────────────────────────────────
-// Get single property (public)
+// ─── GET /api/properties/:id ────────────────────────────────
+// Get single property (public — only approved/legacy-visible)
 router.get("/:id", async (req, res) => {
   try {
-    const property = await Property.findById(req.params.id)
+    // DBG010: Apply same visibility clause as list route so pending/rejected are not publicly accessible
+    const property = await Property.findOne({
+      _id: req.params.id,
+      $or: [{ status: "approved" }, { status: { $exists: false }, published: { $ne: false } }],
+    })
       .populate("postedBy", "name phone")
       .lean();
 

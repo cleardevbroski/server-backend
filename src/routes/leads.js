@@ -84,13 +84,15 @@ router.get("/", auth, adminOnly, async (req, res) => {
     const { page = 1, limit = 20, type, status, sort = "-createdAt" } = req.query;
 
     const filter = {};
-    if (type) filter.type = type;
-    if (status) filter.status = status;
+    if (type) filter.type = String(type);
+    if (status) filter.status = String(status);
 
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
+    const pageNum = Math.max(parseInt(page) || 1, 1);
+    const skip = (pageNum - 1) * limitNum;
 
     const [leads, total] = await Promise.all([
-      Lead.find(filter).sort(sort).skip(skip).limit(parseInt(limit)).lean(),
+      Lead.find(filter).sort(sort).skip(skip).limit(limitNum).lean(),
       Lead.countDocuments(filter),
     ]);
 
@@ -99,10 +101,10 @@ router.get("/", auth, adminOnly, async (req, res) => {
     return res.json({
       leads: mapped,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page: pageNum,
+        limit: limitNum,
         total,
-        pages: Math.ceil(total / parseInt(limit)),
+        pages: Math.ceil(total / limitNum),
       },
     });
   } catch (error) {

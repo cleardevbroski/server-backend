@@ -78,19 +78,28 @@ describe("Property status workflow", () => {
 });
 
 describe("GET /api/properties/:id", () => {
-  it("returns a property by id regardless of status (approved, pending, or legacy without status)", async () => {
+  it("returns approved and legacy properties, but 404 for pending/rejected (DBG010)", async () => {
     const approved = await Property.create({ title: "Approved Villa", price: "1", status: "approved" });
     const pending = await Property.create({ title: "Pending Villa", price: "1", status: "pending" });
+    const rejected = await Property.create({ title: "Rejected Villa", price: "1", status: "rejected" });
+    const legacy = await Property.create({ title: "Legacy Villa", price: "1" }); // no status field
 
     const approvedRes = await request(app).get(`/api/properties/${approved._id}`);
     expect(approvedRes.status).toBe(200);
-    expect(approvedRes.body.property.id).toBe(approved._id.toString());
     expect(approvedRes.body.property.title).toBe("Approved Villa");
 
+    // Pending properties should NOT be publicly accessible
     const pendingRes = await request(app).get(`/api/properties/${pending._id}`);
-    expect(pendingRes.status).toBe(200);
-    expect(pendingRes.body.property.id).toBe(pending._id.toString());
-    expect(pendingRes.body.property.title).toBe("Pending Villa");
+    expect(pendingRes.status).toBe(404);
+
+    // Rejected properties should NOT be publicly accessible
+    const rejectedRes = await request(app).get(`/api/properties/${rejected._id}`);
+    expect(rejectedRes.status).toBe(404);
+
+    // Legacy docs without status should still be visible
+    const legacyRes = await request(app).get(`/api/properties/${legacy._id}`);
+    expect(legacyRes.status).toBe(200);
+    expect(legacyRes.body.property.title).toBe("Legacy Villa");
   });
 
   it("returns 404 for a well-formed id that doesn't exist", async () => {
