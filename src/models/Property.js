@@ -87,4 +87,21 @@ const propertySchema = new mongoose.Schema(
 // Text index for search
 propertySchema.index({ title: "text", subtitle: "text", description: "text" });
 
-module.exports = mongoose.model("Property", propertySchema);
+// Default public listing: status equality + newest-first sort (ESR)
+propertySchema.index({ status: 1, createdAt: -1 });
+// Relational link lookups + unset cascade (see propertyLinkSync)
+propertySchema.index({ builderId: 1 });
+propertySchema.index({ dealerId: 1 });
+// Numeric price range filter in /api/search
+propertySchema.index({ priceValue: 1 });
+// Case-insensitive exact-match filters (queries must request the same collation).
+// strength:2 = case-insensitive; createdAt second key serves the default sort (ESR).
+const CI_COLLATION = { locale: "en", strength: 2 };
+propertySchema.index({ "locality.city": 1, createdAt: -1 }, { collation: CI_COLLATION });
+propertySchema.index({ propertyType: 1, createdAt: -1 }, { collation: CI_COLLATION });
+
+const Property = mongoose.model("Property", propertySchema);
+// Shared so route queries request the exact collation these indexes were built with.
+Property.CI_COLLATION = CI_COLLATION;
+
+module.exports = Property;

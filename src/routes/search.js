@@ -17,8 +17,8 @@ router.get("/", searchLimiter, async (req, res) => {
 
     const filter = {};
     if (q) filter.$text = { $search: q };
-    if (city) filter["locality.city"] = new RegExp(city, "i");
-    if (type) filter.propertyType = new RegExp(type, "i");
+    if (city) filter["locality.city"] = city;
+    if (type) filter.propertyType = type;
     if (bhk) filter.bedrooms = parseInt(bhk);
     if (min || max) {
       filter.priceValue = {};
@@ -27,10 +27,12 @@ router.get("/", searchLimiter, async (req, res) => {
     }
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    // Exact but case-insensitive city/type — request the index collation so the query stays index-backed.
+    const collation = city || type ? Property.CI_COLLATION : undefined;
 
     const [properties, total] = await Promise.all([
-      Property.find(filter).sort(sort).skip(skip).limit(parseInt(limit)).lean(),
-      Property.countDocuments(filter),
+      Property.find(filter).collation(collation).sort(sort).skip(skip).limit(parseInt(limit)).lean(),
+      Property.countDocuments(filter).collation(collation),
     ]);
 
     const mapped = properties.map((p) => ({ ...p, id: p._id.toString() }));

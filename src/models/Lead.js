@@ -13,4 +13,8 @@ const leadSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+// Admin lead list filters by status or type, sorted newest-first (ESR)
+leadSchema.index({ status: 1, createdAt: -1 });
+leadSchema.index({ type: 1, createdAt: -1 });
+
 module.exports = mongoose.model("Lead", leadSchema);

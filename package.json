@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "db:sync-indexes": "node scripts/sync-indexes.js"
   },
   "dependencies": {
     "axios": "^1.7.9",

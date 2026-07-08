@@ -25,24 +25,27 @@ router.get("/", async (req, res) => {
 
     const filter = {};
 
-    if (city) filter["locality.city"] = new RegExp(city, "i");
-    if (propertyType) filter.propertyType = new RegExp(propertyType, "i");
+    if (city) filter["locality.city"] = city;
+    if (propertyType) filter.propertyType = propertyType;
     if (bedrooms) filter.bedrooms = parseInt(bedrooms);
     if (search) filter.$text = { $search: search };
-    
+
     // Public search returns only approved listings (legacy docs without status count as approved)
     filter.$or = [{ status: "approved" }, { status: { $exists: false }, published: { $ne: false } }];
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    // city/propertyType are exact but case-insensitive — request the index collation so the query stays index-backed.
+    const collation = city || propertyType ? Property.CI_COLLATION : undefined;
 
     const [properties, total] = await Promise.all([
       Property.find(filter)
+        .collation(collation)
         .sort(sort)
         .skip(skip)
         .limit(parseInt(limit))
         .populate("postedBy", "name phone")
         .lean(),
-      Property.countDocuments(filter),
+      Property.countDocuments(filter).collation(collation),
     ]);
 
     // Map _id to id for frontend compatibility
@@ -84,21 +87,23 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
 
     const filter = {};
 
-    if (city) filter["locality.city"] = new RegExp(city, "i");
-    if (propertyType) filter.propertyType = new RegExp(propertyType, "i");
+    if (city) filter["locality.city"] = city;
+    if (propertyType) filter.propertyType = propertyType;
     if (bedrooms) filter.bedrooms = parseInt(bedrooms);
     if (search) filter.$text = { $search: search };
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
+    const collation = city || propertyType ? Property.CI_COLLATION : undefined;
 
     const [properties, total] = await Promise.all([
       Property.find(filter)
+        .collation(collation)
         .sort(sort)
         .skip(skip)
         .limit(parseInt(limit))
         .populate("postedBy", "name phone")
         .lean(),
-      Property.countDocuments(filter),
+      Property.countDocuments(filter).collation(collation),
     ]);
 
     // Map _id to id for frontend compatibility
