@@ -28,6 +28,13 @@ app.use(
     credentials: true,
   })
 );
+// Stream large property media before the global JSON parser. The dedicated route
+// validates MIME/signature/size and pipes bytes directly to Cloudinary.
+app.use(
+  "/api/property-media",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many media uploads. Please try again later." } }),
+  require("./routes/propertyMedia")
+);
 // 10mb: allows base64 image payloads (<=5MB each) while staying under MongoDB's
 // 16MB BSON document limit and capping storage/bandwidth abuse on public routes.
 app.use(express.json({ limit: "10mb" }));

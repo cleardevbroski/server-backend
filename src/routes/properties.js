@@ -5,6 +5,7 @@ const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const { linkProperty, unlinkProperty, relinkProperty } = require("../services/propertyLinkSync");
 const { uploadIfBase64, uploadArrayIfBase64 } = require("../utils/mediaUpload");
+const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, PropertyPayloadError } = require("../utils/propertyPayload");
 
 const router = express.Router();
 
@@ -16,6 +17,15 @@ async function convertPropertyMedia(body) {
     uploadIfBase64(body.brochure, { resourceType: "raw", folder: "clear-title/properties/brochures" }),
   ]);
   return { ...body, image, images, videos, brochure };
+}
+
+function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
+  if (body.propertyType === "Apartment") return normalizeApartmentPayload(body, { requireStructured });
+  if (body.propertyType === "Villa") return normalizeVillaPayload(body, { requireStructured });
+  if (body.propertyType === "Plot") return normalizePlotPayload(body, { requireStructured });
+  if (body.propertyType === "Commercial") return normalizeCommercialPayload(body, { requireStructured });
+  if (body.propertyType === "PG/Co-living") return normalizePgPayload(body, { requireStructured });
+  return body;
 }
 
 // ─── GET /api/properties ────────────────────────────────────────
@@ -38,7 +48,18 @@ router.get("/", async (req, res) => {
 
     if (city) filter["locality.city"] = String(city);
     if (propertyType) filter.propertyType = String(propertyType);
-    if (bedrooms) { const b = parseInt(bedrooms); if (Number.isInteger(b)) filter.bedrooms = b; }
+    if (bedrooms) {
+      const b = parseInt(bedrooms);
+      if (Number.isInteger(b)) {
+        filter.$and = [
+          { $or: [
+            { bedrooms: b },
+            { configurationDetails: { $elemMatch: { bedrooms: b } } },
+            { "villaDetails.configurationDetails": { $elemMatch: { bedrooms: b } } },
+          ] },
+        ];
+      }
+    }
     if (search) filter.$text = { $search: String(search) };
     if (minPrice || maxPrice) {
       filter.priceValue = {};
@@ -110,7 +131,16 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
 
     if (city) filter["locality.city"] = String(city);
     if (propertyType) filter.propertyType = String(propertyType);
-    if (bedrooms) { const b = parseInt(bedrooms); if (Number.isInteger(b)) filter.bedrooms = b; }
+    if (bedrooms) {
+      const b = parseInt(bedrooms);
+      if (Number.isInteger(b)) {
+        filter.$or = [
+          { bedrooms: b },
+          { configurationDetails: { $elemMatch: { bedrooms: b } } },
+          { "villaDetails.configurationDetails": { $elemMatch: { bedrooms: b } } },
+        ];
+      }
+    }
     if (search) filter.$text = { $search: String(search) };
     if (minPrice || maxPrice) {
       filter.priceValue = {};
@@ -195,7 +225,15 @@ router.post(
   adminOnly,
   [
     body("title").trim().notEmpty().withMessage("Title is required"),
-    body("price").trim().notEmpty().withMessage("Price is required"),
+    body("price").custom((value, { req }) => {
+      if (typeof value === "string" && value.trim()) return true;
+      if (req.body.propertyType === "Apartment" && Array.isArray(req.body.configurationDetails)) return true;
+      if (req.body.propertyType === "Villa" && Array.isArray(req.body.villaDetails?.configurationDetails)) return true;
+      if (req.body.propertyType === "Plot" && Array.isArray(req.body.plotDetails?.plotSizeDetails)) return true;
+      if (req.body.propertyType === "Commercial" && req.body.commercialDetails) return true;
+      if (req.body.propertyType === "PG/Co-living" && req.body.pgDetails) return true;
+      throw new Error("Price is required");
+    }),
   ],
   async (req, res) => {
     try {
@@ -204,8 +242,9 @@ router.post(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
+      const normalizedBody = normalizeStructuredPayload(req.body, { requireStructured: true });
       const propertyData = {
-        ...(await convertPropertyMedia(req.body)),
+        ...(await convertPropertyMedia(normalizedBody)),
         postedBy: req.user._id,
         postedDate: new Date().toISOString(),
       };
@@ -218,6 +257,7 @@ router.post(
         property: { ...property.toObject(), id: property._id.toString() },
       });
     } catch (error) {
+      if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
       console.error("Create property error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
@@ -242,21 +282,61 @@ router.put(
       if (!existing) {
         return res.status(404).json({ error: "Property not found" });
       }
+      const previousLinks = {
+        _id: existing._id,
+        builderId: existing.builderId,
+        dealerId: existing.dealerId,
+      };
 
-      const property = await Property.findByIdAndUpdate(
-        req.params.id,
-        await convertPropertyMedia(req.body),
-        { new: true, runValidators: true }
-      );
-
-      if (!property) {
-        return res.status(404).json({ error: "Property not found" });
+      const finalType = req.body.propertyType ?? existing.propertyType;
+      const converted = await convertPropertyMedia(req.body);
+      const hasStructuredApartment = Boolean(existing.configurationDetails?.length) || "configurationDetails" in req.body;
+      const hasStructuredVilla = Boolean(existing.villaDetails?.configurationDetails?.length) || "villaDetails" in req.body;
+      const hasStructuredPlot = Boolean(existing.plotDetails?.plotSizeDetails?.length) || "plotDetails" in req.body;
+      const hasStructuredCommercial = Boolean(existing.commercialDetails) || "commercialDetails" in req.body;
+      const hasStructuredPg = Boolean(existing.pgDetails?.sharingDetails?.length) || "pgDetails" in req.body;
+      let updates = converted;
+      if (finalType === "Apartment" && hasStructuredApartment) {
+        updates = normalizeApartmentPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
+      } else if (finalType === "Villa" && hasStructuredVilla) {
+        updates = normalizeVillaPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
+      } else if (finalType === "Plot" && hasStructuredPlot) {
+        updates = normalizePlotPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
+      } else if (finalType === "Commercial" && hasStructuredCommercial) {
+        updates = normalizeCommercialPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
+      } else if (finalType === "PG/Co-living" && hasStructuredPg) {
+        updates = normalizePgPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
+      } else if ("propertyType" in req.body && !["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living"].includes(finalType)) {
+        updates = {
+          ...updates,
+          configurationDetails: undefined,
+          villaDetails: undefined,
+          plotDetails: undefined,
+          commercialDetails: undefined,
+          pgDetails: undefined,
+          possessionDetails: undefined,
+          floorLabel: undefined,
+          totalFloors: undefined,
+        };
       }
+      if (finalType === "Apartment" && !hasStructuredApartment) {
+        if (req.body.reraRegistered === false) updates = { ...updates, reraNumber: "" };
+        if (req.body.transactionType === "Resale") updates = { ...updates, bookingAmount: "" };
+      }
+      if (finalType === "Villa" && !hasStructuredVilla && req.body.reraRegistered === false) {
+        updates = { ...updates, reraNumber: "" };
+      }
+      if (finalType === "Plot" && !hasStructuredPlot && req.body.reraRegistered === false) {
+        updates = { ...updates, reraNumber: "" };
+      }
+      if (finalType === "Commercial" && !hasStructuredCommercial && req.body.reraRegistered === false) updates = { ...updates, reraNumber: "" };
+      existing.set(updates);
+      const property = await existing.save();
 
       if ("builderId" in req.body || "dealerId" in req.body) {
-        const nextBuilderId = "builderId" in req.body ? req.body.builderId : existing.builderId;
-        const nextDealerId = "dealerId" in req.body ? req.body.dealerId : existing.dealerId;
-        await relinkProperty(existing, nextBuilderId, nextDealerId);
+        const nextBuilderId = "builderId" in req.body ? req.body.builderId : previousLinks.builderId;
+        const nextDealerId = "dealerId" in req.body ? req.body.dealerId : previousLinks.dealerId;
+        await relinkProperty(previousLinks, nextBuilderId, nextDealerId);
       }
 
       return res.json({
@@ -267,6 +347,7 @@ router.put(
       if (error.name === "CastError") {
         return res.status(404).json({ error: "Property not found" });
       }
+      if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
       console.error("Update property error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
@@ -301,7 +382,15 @@ router.post(
   "/public",
   [
     body("title").trim().notEmpty().withMessage("Title is required"),
-    body("price").trim().notEmpty().withMessage("Price is required"),
+    body("price").custom((value, { req }) => {
+      if (typeof value === "string" && value.trim()) return true;
+      if (req.body.propertyType === "Apartment" && Array.isArray(req.body.configurationDetails)) return true;
+      if (req.body.propertyType === "Villa" && Array.isArray(req.body.villaDetails?.configurationDetails)) return true;
+      if (req.body.propertyType === "Plot" && Array.isArray(req.body.plotDetails?.plotSizeDetails)) return true;
+      if (req.body.propertyType === "Commercial" && req.body.commercialDetails) return true;
+      if (req.body.propertyType === "PG/Co-living" && req.body.pgDetails) return true;
+      throw new Error("Price is required");
+    }),
   ],
   async (req, res) => {
     try {
@@ -310,8 +399,9 @@ router.post(
         return res.status(400).json({ error: errors.array()[0].msg });
       }
 
+      const normalizedBody = normalizeStructuredPayload(req.body, { requireStructured: true });
       const propertyData = {
-        ...(await convertPropertyMedia(req.body)),
+        ...(await convertPropertyMedia(normalizedBody)),
         published: false,
         verified: false,
         status: "pending",
@@ -326,6 +416,7 @@ router.post(
         property: { ...property.toObject(), id: property._id.toString() },
       });
     } catch (error) {
+      if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
       console.error("Create public property error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }

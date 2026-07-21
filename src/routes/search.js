@@ -19,7 +19,14 @@ router.get("/", searchLimiter, async (req, res) => {
     if (q) filter.$text = { $search: String(q) };
     if (city) filter["locality.city"] = String(city);
     if (type) filter.propertyType = String(type);
-    if (bhk) { const b = parseInt(bhk); if (Number.isInteger(b)) filter.bedrooms = b; }
+    if (bhk) {
+      const b = parseInt(bhk);
+      if (Number.isInteger(b)) filter.$and = [{ $or: [
+        { bedrooms: b },
+        { configurationDetails: { $elemMatch: { bedrooms: b } } },
+        { "villaDetails.configurationDetails": { $elemMatch: { bedrooms: b } } },
+      ] }];
+    }
     const minNum = parseInt(min);
     const maxNum = parseInt(max);
     if (Number.isFinite(minNum) || Number.isFinite(maxNum)) {
