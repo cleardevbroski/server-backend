@@ -203,6 +203,7 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   payload.configurationDetails = rows;
   payload.villaDetails = undefined;
   payload.commercialDetails = undefined;
+  payload.pgDetails = undefined;
   payload.configs = rows.map((row) => row.configuration);
   payload.possessionDetails = {
     status: possession.status,
@@ -331,6 +332,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   };
   payload.configurationDetails = undefined;
   payload.commercialDetails = undefined;
+  payload.pgDetails = undefined;
   payload.floorLabel = undefined;
   payload.totalFloors = undefined;
   payload.ownershipType = undefined;
@@ -476,6 +478,7 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
   payload.configurationDetails = undefined;
   payload.villaDetails = undefined;
   payload.commercialDetails = undefined;
+  payload.pgDetails = undefined;
   payload.possessionDetails = undefined;
   payload.floorLabel = undefined;
   payload.totalFloors = undefined;
@@ -541,7 +544,7 @@ function normalizeCommercialPayload(input, { requireStructured = false } = {}) {
     powerBackup: String(details.powerBackup || "").trim(), sanctionedLoadKva: requireInteger(details.sanctionedLoadKva ?? 0, "Sanctioned load", 0),
     fireSafetyCompliance: String(details.fireSafetyCompliance || "").trim(), furnishing: details.furnishing,
   };
-  payload.configurationDetails = undefined; payload.villaDetails = undefined; payload.plotDetails = undefined;
+  payload.configurationDetails = undefined; payload.villaDetails = undefined; payload.plotDetails = undefined; payload.pgDetails = undefined;
   payload.floorLabel = undefined; payload.totalFloors = undefined; payload.bedrooms = undefined; payload.bathrooms = undefined;
   payload.facing = undefined; payload.furnishing = undefined; payload.parking = undefined; payload.ownershipType = payload.ownershipType || "";
   payload.configs = [details.commercialSubtype];
