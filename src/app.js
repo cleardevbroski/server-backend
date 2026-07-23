@@ -20,8 +20,8 @@ const app = express();
 // ─── Security & Parsing ────────────────────────────────────────
 app.use(helmet());
 const allowedOrigins = process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.split(",").map((u) => u.trim())
-  : "http://localhost:3000";
+  ? process.env.FRONTEND_URL.split(",").map((u) => u.trim().replace(/\/+$/, "")).filter(Boolean)
+  : ["http://localhost:5173", "http://localhost:3000"];
 
 app.use(
   cors({

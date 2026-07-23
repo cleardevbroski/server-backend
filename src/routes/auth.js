@@ -404,11 +404,17 @@ router.post(
   async (req, res) => {
     try {
       const username = req.body.username?.trim();
-      const password = req.body.password?.trim();
+      // A password may intentionally contain spaces. Do not trim it before the
+      // comparison or it can never match the value stored in Render.
+      const password = req.body.password;
 
       // Constant-time comparison to prevent timing attacks (CR004)
       const expectedUser = process.env.ADMIN_USERNAME || "";
       const expectedPass = process.env.ADMIN_PASSWORD || "";
+      if (!expectedUser || !expectedPass) {
+        console.error("Admin login is unavailable: ADMIN_USERNAME or ADMIN_PASSWORD is not configured on the backend service.");
+        return res.status(503).json({ error: "Admin login is not configured on the backend service." });
+      }
       const userBuf = Buffer.from(username || "");
       const passBuf = Buffer.from(password || "");
       const expectedUserBuf = Buffer.from(expectedUser);
