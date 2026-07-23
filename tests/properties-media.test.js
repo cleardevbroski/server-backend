@@ -57,4 +57,15 @@ describe("Property media upload (Cloudinary)", () => {
     expect(res.status).toBe(200);
     expect(res.body.property.image).toBe("https://res.cloudinary.com/demo/image/upload/mock.jpg");
   });
+
+  it("rejects new property video and virtual-tour fields", async () => {
+    const { token } = await createAdminToken();
+    const res = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ title: "Photo Only", price: "50 L", heroVideo: "https://example.com/old.mp4" });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/photos only/i);
+  });
 });

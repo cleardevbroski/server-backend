@@ -50,12 +50,42 @@ router.delete("/testimonials/:id", auth, adminOnly, async (req, res) => {
 
 // ─── LAWYERS ──────────────────────────────────────────────────────────────
 
+function publicLawyer(lawyer) {
+  const row = lawyer.toObject ? lawyer.toObject() : lawyer;
+  return {
+    id: String(row._id),
+    name: row.name,
+    qualification: row.qualification || "",
+    college: row.college || "",
+    graduationYear: row.graduationYear || "",
+    experience: row.experience,
+    barCouncil: row.barCouncil,
+    rating: row.rating,
+    cases: row.cases,
+    specialty: row.specialty,
+    languages: row.languages || "",
+    city: row.city || "",
+    bio: row.bio || "",
+    image: row.image,
+    legalDocumentType: row.legalDocumentType || "",
+    documentVerified: Boolean(row.legalDocumentNumber && row.legalDocumentUrl),
+    whatsappAvailable: Boolean(row.whatsappNumber),
+  };
+}
+
+router.get("/lawyers/admin", auth, adminOnly, async (_req, res) => {
+  try {
+    const lawyers = await Lawyer.find().sort({ createdAt: -1 });
+    res.json(lawyers);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch lawyers" });
+  }
+});
+
 router.get("/lawyers", async (req, res) => {
   try {
-    const filter = {};
-    if (req.query.status) filter.status = req.query.status;
-    const lawyers = await Lawyer.find(filter).sort({ createdAt: -1 });
-    res.json(lawyers);
+    const lawyers = await Lawyer.find({ status: "approved" }).sort({ createdAt: -1 });
+    res.json(lawyers.map(publicLawyer));
   } catch (error) {
     res.status(500).json({ error: "Failed to fetch lawyers" });
   }
@@ -70,7 +100,7 @@ router.post("/lawyers", auth, adminOnly, async (req, res) => {
     await lawyer.save();
     res.status(201).json(lawyer);
   } catch (error) {
-    res.status(500).json({ error: "Failed to create lawyer" });
+    res.status(error.name === "ValidationError" ? 400 : 500).json({ error: error.message || "Failed to create lawyer" });
   }
 });
 
@@ -82,11 +112,12 @@ router.put("/lawyers/:id", auth, adminOnly, async (req, res) => {
         ...req.body,
         image: await uploadIfBase64(req.body.image, { resourceType: "image", folder: "clear-title/lawyers" }),
       },
-      { new: true }
+      { new: true, runValidators: true }
     );
+    if (!lawyer) return res.status(404).json({ error: "Lawyer not found" });
     res.json(lawyer);
   } catch (error) {
-    res.status(500).json({ error: "Failed to update lawyer" });
+    res.status(error.name === "ValidationError" ? 400 : 500).json({ error: error.message || "Failed to update lawyer" });
   }
 });
 

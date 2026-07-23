@@ -1,7 +1,7 @@
 const request = require("supertest");
 const app = require("../src/app");
 const Property = require("../src/models/Property");
-const { createAdminToken } = require("./helpers");
+const { createAdminToken, createUserToken } = require("./helpers");
 
 describe("Property status workflow", () => {
   it("defaults status to approved on direct create", async () => {
@@ -9,12 +9,14 @@ describe("Property status workflow", () => {
     expect(p.status).toBe("approved");
   });
 
-  it("forces status=pending on public submissions even if the body says otherwise", async () => {
+  it("forces status=submitted on authenticated public submissions even if the body says otherwise", async () => {
+    const { token } = await createUserToken();
     const res = await request(app)
       .post("/api/properties/public")
+      .set("Authorization", `Bearer ${token}`)
       .send({ title: "P", price: "1", status: "approved" });
     expect(res.status).toBe(201);
-    expect(res.body.property.status).toBe("pending");
+    expect(res.body.property.status).toBe("submitted");
     expect(res.body.property.published).toBe(false);
   });
 
@@ -71,7 +73,7 @@ describe("Property status workflow", () => {
       .put(`/api/properties/${p._id}`)
       .set("Authorization", `Bearer ${token}`)
       .send({ status: "archived" });
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(400);
     const fresh = await Property.findById(p._id);
     expect(fresh.status).toBe("approved");
   });

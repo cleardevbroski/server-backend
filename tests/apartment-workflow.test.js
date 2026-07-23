@@ -32,7 +32,7 @@ function apartment(overrides = {}) {
         facings: ["South"],
       },
     ],
-    possessionDetails: { status: "Under Construction", expectedCompletionDate: "2028-06-30" },
+    possessionDetails: { status: "Under Construction", expectedCompletionDate: "2028-06" },
     transactionType: "New Property",
     bookingAmount: "₹5,00,000",
     description: "A well-connected apartment project with spacious homes and modern shared amenities.",
@@ -57,6 +57,73 @@ describe("Apartment property workflow", () => {
     expect(res.body.property.possession).toBe("Under Construction");
   });
 
+  it("persists interactive floor-plan rooms and structured facilities", async () => {
+    const { token } = await createAdminToken();
+    const payload = apartment();
+    payload.configurationDetails[0] = {
+      ...payload.configurationDetails[0],
+      id: "unit-2bhk-a",
+      builtUpArea: "1100 sqft",
+      floorPlan2dUrl: "https://cdn.example.com/2bhk-plan.jpg",
+      floorPlan3dUrl: "https://cdn.example.com/2bhk-plan-3d.jpg",
+      rooms: [{ id: "master-bedroom", name: "Master bedroom", category: "bedroom", length: 12, width: 11, unit: "ft", polygon: [{ x: 5, y: 5 }, { x: 45, y: 5 }, { x: 45, y: 40 }, { x: 5, y: 40 }] }],
+    };
+    payload.facilities = [{ id: "pool", name: "Swimming Pool", category: "Wellness", description: "Temperature-controlled pool", status: "Available", hours: "6 AM - 10 PM" }];
+
+    const res = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(payload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.property.configurationDetails[0].rooms[0]).toMatchObject({ name: "Master bedroom", length: 12, width: 11, unit: "ft" });
+    expect(res.body.property.configurationDetails[0].floorPlan3dUrl).toContain("plan-3d.jpg");
+    expect(res.body.property.facilities[0]).toMatchObject({ name: "Swimming Pool", category: "Wellness", status: "Available" });
+  });
+
+  it("persists at most three ordered Project Overview photos", async () => {
+    const { token } = await createAdminToken();
+    const heroImages = [
+      "https://cdn.example.com/hero-1.jpg",
+      "https://cdn.example.com/hero-2.jpg",
+      "https://cdn.example.com/hero-3.jpg",
+    ];
+    const created = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(apartment({
+        heroImages,
+        developerLogoUrl: "https://cdn.example.com/developer-logo.png",
+        localityMapImageUrl: "https://cdn.example.com/locality-map.jpg",
+      }));
+
+    expect(created.status).toBe(201);
+    expect(created.body.property.heroImages).toEqual(heroImages);
+    expect(created.body.property.developerLogoUrl).toContain("developer-logo.png");
+    expect(created.body.property.localityMapImageUrl).toContain("locality-map.jpg");
+
+    const rejected = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(apartment({ heroImages: [...heroImages, "https://cdn.example.com/hero-4.jpg"] }));
+
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/maximum of 3 main photos/i);
+  });
+
+  it("accepts repeated BHK configurations", async () => {
+    const { token } = await createAdminToken();
+    const repeatedRow = {
+      configuration: "3 BHK", price: "₹2.30 Cr", superBuiltUpArea: "1730 sqft", carpetArea: "1245 sqft",
+      bedrooms: 3, bathrooms: 3, balconies: 2, facings: ["South"],
+    };
+    const res = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(apartment({ configs: ["3 BHK", "3 BHK", "3 BHK"], configurationDetails: [repeatedRow, repeatedRow, repeatedRow] }));
+
+    expect(res.status).toBe(201);
+    expect(res.body.property.configs).toEqual(["3 BHK", "3 BHK", "3 BHK"]);
+    expect(res.body.property.configurationDetails).toHaveLength(3);
+  });
+
   it("rejects mismatched tags and rows", async () => {
     const { token } = await createAdminToken();
     const res = await request(app)
@@ -70,7 +137,7 @@ describe("Apartment property workflow", () => {
   it.each([
     ["Ready to Move", { launchDate: "2024-01-15" }],
     ["New Launch", { launchDate: "2027-01-15" }],
-    ["Under Construction", { expectedCompletionDate: "2028-01-15" }],
+    ["Under Construction", { expectedCompletionDate: "2028-01" }],
   ])("accepts %s with its matching date", async (status, dates) => {
     const { token } = await createAdminToken();
     const res = await request(app)
@@ -94,7 +161,7 @@ describe("Apartment property workflow", () => {
         },
       }));
     expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/expected completion date/i);
+    expect(res.body.error).toMatch(/expected completion month and year/i);
   });
 
   it("requires conditional RERA and booking fields", async () => {

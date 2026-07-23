@@ -1,7 +1,8 @@
 const request = require("supertest");
 const app = require("../src/app");
 const Lead = require("../src/models/Lead");
-const { createAdminToken } = require("./helpers");
+const Lawyer = require("../src/models/Lawyer");
+const { createAdminToken, createUserToken } = require("./helpers");
 
 describe("Leads API", () => {
   it("creates a contact lead", async () => {
@@ -19,6 +20,75 @@ describe("Leads API", () => {
       .send({ name: "Ravi", phone: "9876543210", category: "Title Verification" });
     expect(res.status).toBe(201);
     expect(res.body.lead.type).toBe("consultation");
+  });
+
+  it("records an authenticated property consultation and returns the selected lawyer WhatsApp link", async () => {
+    const { token, user } = await createUserToken();
+    user.name = "Ravi Kumar";
+    user.email = "ravi@example.com";
+    await user.save();
+    const lawyer = await Lawyer.create({
+      name: "Adv. Meera Rao",
+      qualification: "B.A. LL.B.",
+      college: "National Law School",
+      experience: "12 years",
+      barCouncil: "KA/100/2014",
+      rating: 4.8,
+      cases: "180+",
+      specialty: "Title Verification",
+      languages: "English, Kannada",
+      city: "Bengaluru",
+      whatsappNumber: "+919876543210",
+      legalDocumentType: "Bar Council Enrollment Certificate",
+      legalDocumentNumber: "KA/100/2014",
+      legalDocumentUrl: "https://cdn.example.com/certificate.pdf",
+      status: "approved",
+    });
+
+    const res = await request(app)
+      .post("/api/leads/consultation/property")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        lawyerId: lawyer._id.toString(),
+        propertyId: "property-123",
+        propertyTitle: "Lakeview Heights",
+        propertyLocation: "Whitefield, Bengaluru",
+        propertyUrl: "https://cleartitle.example/property/property-123",
+        category: "Title deed verification",
+        message: "Please verify the ownership chain and title deed.",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.lead).toMatchObject({
+      type: "consultation",
+      lawyerName: "Adv. Meera Rao",
+      propertyId: "property-123",
+      phone: user.phone,
+    });
+    expect(res.body.whatsappUrl).toContain("https://wa.me/919876543210?text=");
+    expect(decodeURIComponent(res.body.whatsappUrl)).toContain("Lakeview Heights");
+  });
+
+  it("requires customer authentication for a property consultation", async () => {
+    const res = await request(app).post("/api/leads/consultation/property").send({});
+    expect(res.status).toBe(401);
+  });
+
+  it("records a verified property brochure request", async () => {
+    const { token, user } = await createUserToken();
+    const res = await request(app)
+      .post("/api/leads/property-interest")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        propertyId: "property-123",
+        propertyTitle: "Lakeview Heights",
+        audience: "buyer",
+        budget: "₹80 L - ₹1 Cr",
+        phone: user.phone,
+        action: "brochure",
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.lead).toMatchObject({ type: "property_interest", audience: "buyer", action: "brochure", phone: user.phone });
   });
 
   it("rejects contact lead missing required fields", async () => {

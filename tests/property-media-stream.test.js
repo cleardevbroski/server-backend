@@ -42,6 +42,15 @@ describe("streamed property media upload", () => {
     expect(res.status).toBe(415);
   });
 
+  it("rejects the removed video media kind", async () => {
+    const res = await request(app)
+      .post("/api/property-media?kind=video")
+      .set("Content-Type", "video/mp4")
+      .send(Buffer.from("not-a-video"));
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/invalid media kind/i);
+  });
+
   it("rejects content whose signature does not match its MIME type", async () => {
     const res = await request(app)
       .post("/api/property-media?kind=brochure")

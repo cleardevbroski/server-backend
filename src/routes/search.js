@@ -48,7 +48,7 @@ router.get("/", searchLimiter, async (req, res) => {
       Property.find(filter)
         .collation(collation)
         // Exclude heavy base64 media from list responses; keep first image as cover thumbnail
-        .select("-videos -brochure")
+        .select("-heroVideo -videos -virtualTourUrl -brochure")
         .slice("images", 1)
         .sort(sort)
         .skip(skip)

@@ -15,10 +15,13 @@ const userSchema = new mongoose.Schema(
     },
     email: {
       type: String,
-      default: "",
+      default: undefined,
       trim: true,
       lowercase: true,
     },
+    passwordHash: { type: String, default: "", select: false },
+    resetPasswordTokenHash: { type: String, default: "", select: false },
+    resetPasswordExpiresAt: { type: Date, default: null, select: false },
     role: {
       type: String,
       enum: ["user", "admin"],
@@ -32,6 +35,11 @@ const userSchema = new mongoose.Schema(
   {
     timestamps: true,
   }
+);
+
+userSchema.index(
+  { email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: "string", $gt: "" } } }
 );
 
 module.exports = mongoose.model("User", userSchema);

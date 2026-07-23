@@ -6,6 +6,9 @@ const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
 const { createAndSendOTP, verifyOTP } = require("../services/otpService");
 const auth = require("../middleware/auth");
+const { hashPassword, verifyPassword } = require("../utils/password");
+const { sendPasswordResetEmail } = require("../services/emailService");
+const { recordLoginAudit } = require("../services/loginAuditService");
 
 const router = express.Router();
 
@@ -26,6 +29,137 @@ const adminLoginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+const customerAuthLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many attempts. Please try again after 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+function signUserToken(user) {
+  return jwt.sign(
+    { userId: user._id, phone: user.phone, role: user.role },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRY || "30d" }
+  );
+}
+
+function publicUser(user) {
+  return { id: user._id, phone: user.phone, name: user.name, email: user.email, role: user.role };
+}
+
+router.post(
+  "/register",
+  customerAuthLimiter,
+  [
+    body("name").trim().isLength({ min: 2, max: 100 }).withMessage("Name is required"),
+    body("phone").trim().matches(/^[6-9]\d{9}$/).withMessage("Please enter a valid 10-digit Indian mobile number"),
+    body("email").trim().isEmail().normalizeEmail().withMessage("Please enter a valid email address"),
+    body("password").isLength({ min: 8, max: 128 }).withMessage("Password must contain at least 8 characters"),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+      const email = req.body.email.toLowerCase();
+      if (await User.exists({ $or: [{ email }, { phone: req.body.phone }] })) {
+        return res.status(409).json({ error: "An account already exists with this email or phone number" });
+      }
+      const user = await User.create({
+        name: req.body.name,
+        phone: req.body.phone,
+        email,
+        passwordHash: await hashPassword(req.body.password),
+        isVerified: true,
+      });
+      await recordLoginAudit(req, { user, method: "password_registration", status: "success" });
+      return res.status(201).json({ message: "Account created", token: signUserToken(user), user: publicUser(user) });
+    } catch (error) {
+      if (error?.code === 11000) return res.status(409).json({ error: "An account already exists with this email or phone number" });
+      console.error("Customer registration error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+router.post(
+  "/login",
+  customerAuthLimiter,
+  [body("email").trim().isEmail().normalizeEmail(), body("password").notEmpty()],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ error: "Enter a valid email and password" });
+      const user = await User.findOne({ email: req.body.email.toLowerCase() }).select("+passwordHash");
+      if (!user || user.role !== "user" || !(await verifyPassword(req.body.password, user.passwordHash))) {
+        await recordLoginAudit(req, { email: req.body.email, method: "password", status: "failed" });
+        return res.status(401).json({ error: "Invalid email or password" });
+      }
+      await recordLoginAudit(req, { user, method: "password", status: "success" });
+      return res.json({ message: "Login successful", token: signUserToken(user), user: publicUser(user) });
+    } catch (error) {
+      console.error("Customer login error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
+
+router.post(
+  "/forgot-password",
+  customerAuthLimiter,
+  [body("email").trim().isEmail().normalizeEmail()],
+  async (req, res) => {
+    const generic = { message: "If an account exists, password reset instructions have been sent." };
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.json(generic);
+      const user = await User.findOne({ email: req.body.email.toLowerCase(), role: "user" }).select("+resetPasswordTokenHash +resetPasswordExpiresAt");
+      if (!user) return res.json(generic);
+      const token = crypto.randomBytes(32).toString("hex");
+      user.resetPasswordTokenHash = crypto.createHash("sha256").update(token).digest("hex");
+      user.resetPasswordExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      await user.save();
+      const delivery = await sendPasswordResetEmail({ email: user.email, name: user.name, token });
+      return res.json({ ...generic, ...(process.env.NODE_ENV !== "production" ? { devResetUrl: delivery.devResetUrl } : {}) });
+    } catch (error) {
+      console.error("Forgot password error:", error);
+      return res.json(generic);
+    }
+  }
+);
+
+router.post(
+  "/reset-password",
+  customerAuthLimiter,
+  [
+    body("email").trim().isEmail().normalizeEmail(),
+    body("token").isLength({ min: 32 }),
+    body("password").isLength({ min: 8, max: 128 }).withMessage("Password must contain at least 8 characters"),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+      const tokenHash = crypto.createHash("sha256").update(req.body.token).digest("hex");
+      const user = await User.findOne({
+        email: req.body.email.toLowerCase(),
+        resetPasswordTokenHash: tokenHash,
+        resetPasswordExpiresAt: { $gt: new Date() },
+      }).select("+passwordHash +resetPasswordTokenHash +resetPasswordExpiresAt");
+      if (!user) return res.status(400).json({ error: "The reset link is invalid or has expired" });
+      user.passwordHash = await hashPassword(req.body.password);
+      user.resetPasswordTokenHash = "";
+      user.resetPasswordExpiresAt = null;
+      await user.save();
+      return res.json({ message: "Password reset successful" });
+    } catch (error) {
+      console.error("Reset password error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  }
+);
 
 // ─── POST /api/auth/send-otp ────────────────────────────────────
 // Send an OTP to the given phone number
@@ -49,6 +183,7 @@ router.post(
       const result = await createAndSendOTP(phone);
 
       if (result.success) {
+        await recordLoginAudit(req, { phone, method: "otp_requested", status: "success" });
         return res.json({
           message: "OTP sent successfully",
           mode: result.mode, // "dev" or "sms" — frontend can show appropriate message
@@ -111,6 +246,7 @@ router.post(
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRY || "30d" }
       );
+      await recordLoginAudit(req, { user, method: "otp", status: "success" });
 
       return res.json({
         message: "Login successful",
@@ -183,6 +319,7 @@ router.put(
         },
       });
     } catch (error) {
+      if (error?.code === 11000) return res.status(409).json({ error: "That email address is already linked to another account" });
       console.error("Update profile error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
@@ -282,6 +419,7 @@ router.post(
         crypto.timingSafeEqual(passBuf, expectedPassBuf);
 
       if (!userMatch || !passMatch) {
+        await recordLoginAudit(req, { phone: "9999999999", method: "password", status: "failed" });
         return res.status(401).json({ error: "Invalid admin credentials" });
       }
 
@@ -301,6 +439,7 @@ router.post(
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRY || "30d" }
       );
+      await recordLoginAudit(req, { user: adminUser, method: "password", status: "success" });
 
       return res.json({
         message: "Admin login successful",

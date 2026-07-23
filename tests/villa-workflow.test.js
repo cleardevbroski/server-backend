@@ -1,7 +1,7 @@
 const request = require("supertest");
 const app = require("../src/app");
 const Property = require("../src/models/Property");
-const { createAdminToken } = require("./helpers");
+const { createAdminToken, createUserToken } = require("./helpers");
 
 function villa(overrides = {}) {
   return {
@@ -70,6 +70,24 @@ describe("Villa property workflow", () => {
     expect(res.body.property.facing).toBe("East");
     expect(res.body.property.villaDetails.plotDimensions).toBe("40 ft × 60 ft");
     expect(res.body.property.villaDetails.numberOfFloors).toBe("G+2");
+  });
+
+  it("accepts repeated BHK configurations", async () => {
+    const { token } = await createAdminToken();
+    const repeatedRow = {
+      configuration: "3 BHK", price: "₹95 L", plotArea: "2400 sqft", builtUpArea: "3200 sqft",
+      superArea: "3600 sqft", bedrooms: 3, bathrooms: 3,
+    };
+    const payload = villa({ configs: ["3 BHK", "3 BHK", "3 BHK"] });
+    payload.villaDetails.configurationDetails = [repeatedRow, repeatedRow, repeatedRow];
+    const res = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.property.configs).toEqual(["3 BHK", "3 BHK", "3 BHK"]);
+    expect(res.body.property.villaDetails.configurationDetails).toHaveLength(3);
   });
 
   it("rejects mismatched tags and rows", async () => {
@@ -227,10 +245,11 @@ describe("Villa property workflow", () => {
     expect(res.body.property.possessionDetails).toBeUndefined();
   });
 
-  it("puts public Villa submissions into the pending moderation queue", async () => {
-    const res = await request(app).post("/api/properties/public").send(villa());
+  it("puts authenticated public Villa submissions into the submitted moderation queue", async () => {
+    const { token } = await createUserToken();
+    const res = await request(app).post("/api/properties/public").set("Authorization", `Bearer ${token}`).send(villa());
     expect(res.status).toBe(201);
-    expect(res.body.property.status).toBe("pending");
+    expect(res.body.property.status).toBe("submitted");
     expect(res.body.property.published).toBe(false);
     expect(res.body.property.villaDetails.configurationDetails).toHaveLength(2);
   });

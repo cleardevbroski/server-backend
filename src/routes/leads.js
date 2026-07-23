@@ -2,6 +2,7 @@ const express = require("express");
 const { body, validationResult } = require("express-validator");
 const rateLimit = require("express-rate-limit");
 const Lead = require("../models/Lead");
+const Lawyer = require("../models/Lawyer");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 
@@ -73,6 +74,120 @@ router.post(
       });
     } catch (error) {
       console.error("Create consultation lead error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// POST /api/leads/consultation/property (OTP-authenticated, property-specific)
+router.post(
+  "/consultation/property",
+  auth,
+  leadLimiter,
+  [
+    body("lawyerId").isMongoId().withMessage("Choose a valid lawyer"),
+    body("propertyId").trim().notEmpty().withMessage("Property is required"),
+    body("propertyTitle").trim().notEmpty().withMessage("Property title is required"),
+    body("propertyLocation").optional().trim().isLength({ max: 300 }),
+    body("propertyUrl").optional().trim().isLength({ max: 2000 }),
+    body("category").trim().notEmpty().isLength({ max: 100 }).withMessage("Choose a consultation topic"),
+    body("message").trim().isLength({ min: 10, max: 2000 }).withMessage("Please describe your request in at least 10 characters"),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+      if (!req.user.name || !req.user.email) {
+        return res.status(400).json({ error: "Complete your name and email before consulting a lawyer" });
+      }
+
+      const lawyer = await Lawyer.findOne({ _id: req.body.lawyerId, status: "approved" });
+      if (!lawyer) return res.status(404).json({ error: "The selected lawyer is no longer available" });
+      if (!lawyer.whatsappNumber) return res.status(409).json({ error: "This lawyer has not enabled WhatsApp consultations" });
+
+      const lead = await Lead.create({
+        type: "consultation",
+        name: req.user.name,
+        email: req.user.email,
+        phone: req.user.phone,
+        message: req.body.message,
+        category: req.body.category,
+        propertyId: req.body.propertyId,
+        propertyTitle: req.body.propertyTitle,
+        propertyLocation: req.body.propertyLocation || "",
+        propertyUrl: req.body.propertyUrl || "",
+        lawyerId: lawyer._id.toString(),
+        lawyerName: lawyer.name,
+      });
+
+      let whatsappNumber = String(lawyer.whatsappNumber).replace(/\D/g, "");
+      if (whatsappNumber.length === 10) whatsappNumber = `91${whatsappNumber}`;
+      const messageLines = [
+        `Hello ${lawyer.name},`,
+        "I would like a legal consultation through ClearTitle One.",
+        "",
+        `Property: ${req.body.propertyTitle}`,
+        `Property ID: ${req.body.propertyId}`,
+        req.body.propertyLocation ? `Location: ${req.body.propertyLocation}` : "",
+        req.body.propertyUrl ? `Property link: ${req.body.propertyUrl}` : "",
+        `Consultation topic: ${req.body.category}`,
+        `Request: ${req.body.message}`,
+        "",
+        `Customer: ${req.user.name}`,
+        `Email: ${req.user.email}`,
+        `Verified phone: +91 ${req.user.phone}`,
+        `ClearTitle request ID: ${lead._id}`,
+      ].filter(Boolean);
+
+      return res.status(201).json({
+        message: "Consultation request recorded. Continue in WhatsApp to send it to the lawyer.",
+        lead: { ...lead.toObject(), id: lead._id.toString() },
+        whatsappUrl: `https://wa.me/${whatsappNumber}?text=${encodeURIComponent(messageLines.join("\n"))}`,
+      });
+    } catch (error) {
+      console.error("Create property consultation lead error:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+  },
+);
+
+// POST /api/leads/property-interest (verified public-property action)
+router.post(
+  "/property-interest",
+  auth,
+  leadLimiter,
+  [
+    body("propertyId").trim().notEmpty().withMessage("Property is required"),
+    body("propertyTitle").trim().notEmpty().withMessage("Property title is required"),
+    body("audience").isIn(["buyer", "builder"]).withMessage("Choose Buyer or Builder"),
+    body("budget").trim().notEmpty().withMessage("Budget is required"),
+    body("action").isIn(["brochure", "call", "enquiry"]).withMessage("Invalid property action"),
+    body("phone").trim().matches(/^[6-9]\d{9}$/).withMessage("Enter a valid 10-digit Indian mobile number"),
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+      if (req.body.phone !== req.user.phone) return res.status(403).json({ error: "Verify the same phone number before continuing" });
+
+      const lead = await Lead.create({
+        type: "property_interest",
+        name: req.user.name || `Verified ${req.body.audience}`,
+        email: req.user.email || "",
+        phone: req.user.phone,
+        message: `Verified ${req.body.action} request for ${req.body.propertyTitle}`,
+        propertyId: req.body.propertyId,
+        propertyTitle: req.body.propertyTitle,
+        audience: req.body.audience,
+        budget: req.body.budget,
+        action: req.body.action,
+      });
+      return res.status(201).json({
+        message: "Your verified request has been received.",
+        lead: { ...lead.toObject(), id: lead._id.toString() },
+      });
+    } catch (error) {
+      console.error("Create property-interest lead error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   },

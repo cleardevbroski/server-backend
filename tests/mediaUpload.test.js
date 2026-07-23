@@ -41,17 +41,17 @@ describe("mediaUpload helper", () => {
 
   it("uploads only the base64 entries of an array, leaving hosted URLs untouched", async () => {
     cloudinary.uploader.upload.mockResolvedValue({
-      secure_url: "https://res.cloudinary.com/demo/video/upload/y.mp4",
+      secure_url: "https://res.cloudinary.com/demo/image/upload/y.jpg",
     });
 
     const result = await uploadArrayIfBase64(
-      ["data:video/mp4;base64,BBBB", "https://youtu.be/existing"],
-      { resourceType: "video", folder: "clear-title/properties/videos" }
+      ["data:image/png;base64,BBBB", "https://res.cloudinary.com/demo/image/upload/existing.jpg"],
+      { resourceType: "image", folder: "clear-title/properties" }
     );
 
     expect(result).toEqual([
-      "https://res.cloudinary.com/demo/video/upload/y.mp4",
-      "https://youtu.be/existing",
+      "https://res.cloudinary.com/demo/image/upload/y.jpg",
+      "https://res.cloudinary.com/demo/image/upload/existing.jpg",
     ]);
   });
 

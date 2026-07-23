@@ -1,5 +1,7 @@
 const express = require("express");
 const { uploadRequestStream } = require("../utils/mediaUpload");
+const auth = require("../middleware/auth");
+const adminOnly = require("../middleware/adminOnly");
 
 const router = express.Router();
 
@@ -9,12 +11,6 @@ const KINDS = {
     maxBytes: 5 * 1024 * 1024,
     resourceType: "image",
     folder: "clear-title/properties",
-  },
-  video: {
-    mime: new Set(["video/mp4", "video/webm"]),
-    maxBytes: 50 * 1024 * 1024,
-    resourceType: "video",
-    folder: "clear-title/properties/videos",
   },
   brochure: {
     mime: new Set(["application/pdf"]),
@@ -34,11 +30,29 @@ const KINDS = {
     resourceType: "raw",
     folder: "clear-title/properties/layout-maps",
   },
+  "legal-document-image": {
+    mime: new Set(["image/jpeg", "image/png", "image/webp"]),
+    maxBytes: 5 * 1024 * 1024,
+    resourceType: "image",
+    folder: "clear-title/lawyers/documents",
+    requiresAdmin: true,
+  },
+  "legal-document-pdf": {
+    mime: new Set(["application/pdf"]),
+    maxBytes: 5 * 1024 * 1024,
+    resourceType: "raw",
+    folder: "clear-title/lawyers/documents",
+    requiresAdmin: true,
+  },
 };
 
-router.post("/", async (req, res) => {
+router.post("/", (req, res, next) => {
   const rules = KINDS[req.query.kind];
   if (!rules) return res.status(400).json({ error: "Invalid media kind" });
+  if (!rules.requiresAdmin) return next();
+  return auth(req, res, () => adminOnly(req, res, next));
+}, async (req, res) => {
+  const rules = KINDS[req.query.kind];
   const mime = String(req.headers["content-type"] || "").split(";")[0].toLowerCase();
   if (!rules.mime.has(mime)) return res.status(415).json({ error: `Unsupported ${req.query.kind} file type` });
   const length = Number(req.headers["content-length"] || 0);

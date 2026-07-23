@@ -15,4 +15,14 @@ async function createAdminToken() {
   return { token, admin };
 }
 
-module.exports = { createAdminToken };
+async function createUserToken() {
+  const user = await User.create({ phone: "9000000002", role: "user", isVerified: true });
+  const token = jwt.sign(
+    { userId: user._id, phone: user.phone, role: "user" },
+    process.env.JWT_SECRET,
+    { expiresIn: "1h" }
+  );
+  return { token, user };
+}
+
+module.exports = { createAdminToken, createUserToken };
