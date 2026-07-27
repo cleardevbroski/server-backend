@@ -2,8 +2,8 @@ const mongoose = require("mongoose");
 
 const planPointSchema = new mongoose.Schema(
   {
-    x: { type: Number, required: true, min: 0, max: 100 },
-    y: { type: Number, required: true, min: 0, max: 100 },
+    x: { type: Number, min: 0, max: 100 },
+    y: { type: Number, min: 0, max: 100 },
   },
   { _id: false }
 );
@@ -11,7 +11,7 @@ const planPointSchema = new mongoose.Schema(
 const apartmentRoomSchema = new mongoose.Schema(
   {
     id: { type: String, default: "", trim: true },
-    name: { type: String, required: true, trim: true },
+    name: { type: String, trim: true },
     category: {
       type: String,
       enum: ["bedroom", "bathroom", "kitchen", "living", "dining", "balcony", "utility", "other"],
@@ -31,14 +31,14 @@ const apartmentRoomSchema = new mongoose.Schema(
 const configurationDetailSchema = new mongoose.Schema(
   {
     id: { type: String, default: "", trim: true },
-    configuration: { type: String, required: true, trim: true },
-    price: { type: String, required: true, trim: true },
-    superBuiltUpArea: { type: String, required: true, trim: true },
-    carpetArea: { type: String, required: true, trim: true },
+    configuration: { type: String, trim: true },
+    price: { type: String, trim: true },
+    superBuiltUpArea: { type: String, trim: true },
+    carpetArea: { type: String, trim: true },
     builtUpArea: { type: String, default: "", trim: true },
-    bedrooms: { type: Number, required: true, min: 1 },
-    bathrooms: { type: Number, required: true, min: 1 },
-    balconies: { type: Number, required: true, min: 0 },
+    bedrooms: { type: Number, min: 1 },
+    bathrooms: { type: Number, min: 1 },
+    balconies: { type: Number, min: 0 },
     facings: [{ type: String, trim: true }],
     floorPlan2dUrl: { type: String, default: "", trim: true },
     floorPlan3dUrl: { type: String, default: "", trim: true },
@@ -50,7 +50,7 @@ const configurationDetailSchema = new mongoose.Schema(
 const facilityDetailSchema = new mongoose.Schema(
   {
     id: { type: String, default: "", trim: true },
-    name: { type: String, required: true, trim: true },
+    name: { type: String, trim: true },
     category: { type: String, default: "Other", trim: true },
     description: { type: String, default: "", trim: true },
     imageUrl: { type: String, default: "", trim: true },
@@ -62,48 +62,47 @@ const facilityDetailSchema = new mongoose.Schema(
 
 const villaConfigurationDetailSchema = new mongoose.Schema(
   {
-    configuration: { type: String, required: true, trim: true },
-    price: { type: String, required: true, trim: true },
-    plotArea: { type: String, required: true, trim: true },
-    builtUpArea: { type: String, required: true, trim: true },
-    superArea: { type: String, required: true, trim: true },
-    bedrooms: { type: Number, required: true, min: 1 },
-    bathrooms: { type: Number, required: true, min: 1 },
+    configuration: { type: String, trim: true },
+    price: { type: String, trim: true },
+    plotArea: { type: String, trim: true },
+    builtUpArea: { type: String, trim: true },
+    superArea: { type: String, trim: true },
+    bedrooms: { type: Number, min: 1 },
+    bathrooms: { type: Number, min: 1 },
   },
   { _id: false }
 );
 
 const villaDetailsSchema = new mongoose.Schema(
   {
-    villaType: { type: String, enum: ["Independent", "Row Villa", "Twin Villa"], required: true },
-    configurationDetails: { type: [villaConfigurationDetailSchema], required: true },
+    villaType: { type: String, enum: ["Independent", "Row Villa", "Twin Villa"] },
+    configurationDetails: { type: [villaConfigurationDetailSchema] },
     plotDimensions: { type: String, default: "", trim: true },
     numberOfFloors: { type: String, default: "", trim: true },
     plotFacing: {
       type: String,
       enum: ["East", "West", "North", "South", "North-East", "North-West", "South-East", "South-West"],
-      required: true,
     },
-    cornerPlot: { type: Boolean, required: true },
+    cornerPlot: { type: Boolean },
     roadWidthFacing: { type: String, default: "", trim: true },
-    privateGarden: { type: Boolean, required: true },
+    privateGarden: { type: Boolean },
     privateGardenArea: { type: String, default: "", trim: true },
-    privatePool: { type: Boolean, required: true },
-    terrace: { type: Boolean, required: true },
+    privatePool: { type: Boolean },
+    terrace: { type: Boolean },
     terraceDetails: { type: String, default: "", trim: true },
-    gatedCommunity: { type: Boolean, required: true },
+    gatedCommunity: { type: Boolean },
   },
   { _id: false }
 );
 
 const plotSizeDetailSchema = new mongoose.Schema(
   {
-    plotSize: { type: String, required: true, trim: true },
-    width: { type: Number, required: true, min: 1 },
-    length: { type: Number, required: true, min: 1 },
-    areaSqft: { type: Number, required: true, min: 1 },
-    pricePerSqft: { type: Number, required: true, min: 1 },
-    totalPrice: { type: Number, required: true, min: 1 },
+    plotSize: { type: String, trim: true },
+    width: { type: Number, min: 1 },
+    length: { type: Number, min: 1 },
+    areaSqft: { type: Number, min: 1 },
+    pricePerSqft: { type: Number, min: 1 },
+    totalPrice: { type: Number, min: 1 },
     facings: [{ type: String, trim: true }],
   },
   { _id: false }
@@ -111,80 +110,79 @@ const plotSizeDetailSchema = new mongoose.Schema(
 
 const plotInventorySchema = new mongoose.Schema(
   {
-    plotNumber: { type: String, required: true, trim: true },
-    plotSize: { type: String, required: true, trim: true },
-    facing: { type: String, required: true, trim: true },
-    status: { type: String, enum: ["Available", "Booked", "Sold"], required: true },
-    isCorner: { type: Boolean, required: true },
+    plotNumber: { type: String, trim: true },
+    plotSize: { type: String, trim: true },
+    facing: { type: String, trim: true },
+    status: { type: String, enum: ["Available", "Booked", "Sold"] },
+    isCorner: { type: Boolean },
   },
   { _id: false }
 );
 
 const plotDetailsSchema = new mongoose.Schema(
   {
-    plotSizeDetails: { type: [plotSizeDetailSchema], required: true },
-    totalPlots: { type: Number, required: true, min: 1 },
-    approvalAuthority: { type: String, enum: ["BMRDA", "BDA", "DTCP", "Panchayat"], required: true },
+    plotSizeDetails: { type: [plotSizeDetailSchema] },
+    totalPlots: { type: Number, min: 1 },
+    approvalAuthority: { type: String, enum: ["BMRDA", "BDA", "DTCP", "Panchayat"] },
     approvalNumber: { type: String, default: "", trim: true },
     roadWidth: { type: String, default: "", trim: true },
     civicInfrastructure: {
-      undergroundDrainage: { type: String, enum: ["Ready", "Under Development"], required: true },
-      electricity: { type: String, enum: ["Ready", "Under Development"], required: true },
-      water: { type: String, enum: ["Ready", "Under Development"], required: true },
+      undergroundDrainage: { type: String, enum: ["Ready", "Under Development"] },
+      electricity: { type: String, enum: ["Ready", "Under Development"] },
+      water: { type: String, enum: ["Ready", "Under Development"] },
     },
-    layoutMapUrl: { type: String, required: true, trim: true },
-    layoutMapType: { type: String, enum: ["image", "pdf"], required: true },
+    layoutMapUrl: { type: String, trim: true },
+    layoutMapType: { type: String, enum: ["image", "pdf"] },
     layoutPossession: {
-      status: { type: String, enum: ["Layout Ready", "Under Development"], required: true },
+      status: { type: String, enum: ["Layout Ready", "Under Development"] },
       readyDate: { type: String, default: "" },
       expectedCompletionDate: { type: String, default: "" },
     },
-    inventory: { type: [plotInventorySchema], required: true },
+    inventory: { type: [plotInventorySchema] },
   },
   { _id: false }
 );
 
 const commercialDetailsSchema = new mongoose.Schema(
   {
-    commercialSubtype: { type: String, enum: ["Office Space", "Shop/Showroom", "Warehouse", "Industrial Shed", "Co-working"], required: true },
+    commercialSubtype: { type: String, enum: ["Office Space", "Shop/Showroom", "Warehouse", "Industrial Shed", "Co-working"] },
     carpetArea: { type: String, default: "", trim: true },
     builtUpArea: { type: String, default: "", trim: true },
     superArea: { type: String, default: "", trim: true },
-    floor: { type: String, required: true, trim: true },
-    totalFloors: { type: Number, required: true, min: 1 },
+    floor: { type: String, trim: true },
+    totalFloors: { type: Number, min: 1 },
     frontage: { type: String, default: "", trim: true },
-    zoneType: { type: String, enum: ["IT/ITES SEZ", "Non-SEZ", "Retail", "Industrial"], required: true },
+    zoneType: { type: String, enum: ["IT/ITES SEZ", "Non-SEZ", "Retail", "Industrial"] },
     seatingCapacity: { type: Number, min: 0, default: 0 },
     cabins: { type: Number, min: 0, default: 0 },
     meetingRooms: { type: Number, min: 0, default: 0 },
-    buildingGrade: { type: String, enum: ["Grade A", "Grade B", "Grade C", "Not Applicable"], required: true },
+    buildingGrade: { type: String, enum: ["Grade A", "Grade B", "Grade C", "Not Applicable"] },
     structure: { type: String, default: "", trim: true },
-    pantry: { type: String, enum: ["None", "Shared Pantry", "Private Pantry"], required: true },
+    pantry: { type: String, enum: ["None", "Shared Pantry", "Private Pantry"] },
     washrooms: { type: String, default: "", trim: true },
     parking: { type: String, default: "", trim: true },
     powerBackup: { type: String, default: "", trim: true },
     sanctionedLoadKva: { type: Number, min: 0, default: 0 },
     fireSafetyCompliance: { type: String, default: "", trim: true },
-    furnishing: { type: String, enum: ["Bare Shell", "Warm Shell", "Fully Furnished"], required: true },
+    furnishing: { type: String, enum: ["Bare Shell", "Warm Shell", "Fully Furnished"] },
   },
   { _id: false }
 );
 
-const pgSharingSchema = new mongoose.Schema({ sharingType: { type: String, enum: ["Single occupancy", "Double sharing", "Triple sharing", "Four sharing"], required: true }, rentPerBed: { type: Number, required: true, min: 1 }, deposit: { type: Number, required: true, min: 0 }, bedsAvailable: { type: Number, required: true, min: 0 } }, { _id: false });
+const pgSharingSchema = new mongoose.Schema({ sharingType: { type: String, enum: ["Single occupancy", "Double sharing", "Triple sharing", "Four sharing"] }, rentPerBed: { type: Number, min: 1 }, deposit: { type: Number, min: 0 }, bedsAvailable: { type: Number, min: 0 } }, { _id: false });
 const pgDetailsSchema = new mongoose.Schema({
-  genderPreference: { type: String, enum: ["Men only", "Women only", "Co-ed"], required: true }, sharingDetails: { type: [pgSharingSchema], required: true },
-  mealsIncluded: { type: String, enum: ["Breakfast + Dinner", "All 3 meals", "No meals"], required: true }, foodType: { type: String, enum: ["", "Veg only", "Veg + Non-veg"], default: "" },
-  wifiIncluded: { type: Boolean, required: true }, laundryIncluded: { type: Boolean, required: true }, laundrySchedule: { type: String, default: "", trim: true }, housekeeping: { type: String, default: "", trim: true },
-  curfewEntryTiming: { type: String, default: "", trim: true }, visitorsAllowed: { type: String, default: "", trim: true }, noticePeriod: { type: String, default: "", trim: true }, lockInPeriod: { type: String, default: "", trim: true }, idProofRequired: { type: String, default: "", trim: true }, utilitiesIncluded: { type: String, default: "", trim: true }, availableFrom: { type: String, required: true }, commonAmenities: [{ type: String, trim: true }], contactType: { type: String, enum: ["Owner", "PG Manager", "Company-run"], required: true },
+  genderPreference: { type: String, enum: ["Men only", "Women only", "Co-ed"] }, sharingDetails: { type: [pgSharingSchema] },
+  mealsIncluded: { type: String, enum: ["Breakfast + Dinner", "All 3 meals", "No meals"] }, foodType: { type: String, enum: ["", "Veg only", "Veg + Non-veg"], default: "" },
+  wifiIncluded: { type: Boolean }, laundryIncluded: { type: Boolean }, laundrySchedule: { type: String, default: "", trim: true }, housekeeping: { type: String, default: "", trim: true },
+  curfewEntryTiming: { type: String, default: "", trim: true }, visitorsAllowed: { type: String, default: "", trim: true }, noticePeriod: { type: String, default: "", trim: true }, lockInPeriod: { type: String, default: "", trim: true }, idProofRequired: { type: String, default: "", trim: true }, utilitiesIncluded: { type: String, default: "", trim: true }, availableFrom: { type: String }, commonAmenities: [{ type: String, trim: true }], contactType: { type: String, enum: ["Owner", "PG Manager", "Company-run"] },
 }, { _id: false });
-const rentDetailsSchema = new mongoose.Schema({ rentalPropertyType: { type: String, enum: ["Apartment", "Villa", "Independent House"], required: true }, configuration: { type: String, required: true, trim: true }, monthlyRent: { type: Number, required: true, min: 1 }, securityDeposit: { type: Number, required: true, min: 0 }, maintenanceMode: { type: String, enum: ["Included", "Extra"], required: true }, maintenanceAmount: { type: Number, min: 0, default: 0 }, availableFrom: { type: String, required: true }, lockInPeriod: { type: String, default: "", trim: true }, preferredTenantTypes: [{ type: String, trim: true }], superArea: { type: String, default: "", trim: true }, carpetArea: { type: String, default: "", trim: true }, bedrooms: { type: Number, min: 0, default: 0 }, bathrooms: { type: Number, min: 0, default: 0 }, floor: { type: String, default: "", trim: true }, totalFloors: { type: Number, min: 1 }, facing: { type: String, default: "", trim: true }, parking: { type: String, default: "", trim: true }, furnishing: { type: String, enum: ["Unfurnished", "Semi-Furnished", "Fully Furnished"], required: true }, petFriendly: { type: Boolean, required: true }, nonVegAllowed: { type: Boolean, required: true }, contactType: { type: String, enum: ["Owner", "Broker"], required: true } }, { _id: false });
+const rentDetailsSchema = new mongoose.Schema({ rentalPropertyType: { type: String, enum: ["Apartment", "Villa", "Independent House"] }, configuration: { type: String, trim: true }, monthlyRent: { type: Number, min: 1 }, securityDeposit: { type: Number, min: 0 }, maintenanceMode: { type: String, enum: ["Included", "Extra"] }, maintenanceAmount: { type: Number, min: 0, default: 0 }, availableFrom: { type: String }, lockInPeriod: { type: String, default: "", trim: true }, preferredTenantTypes: [{ type: String, trim: true }], superArea: { type: String, default: "", trim: true }, carpetArea: { type: String, default: "", trim: true }, bedrooms: { type: Number, min: 0, default: 0 }, bathrooms: { type: Number, min: 0, default: 0 }, floor: { type: String, default: "", trim: true }, totalFloors: { type: Number, min: 1 }, facing: { type: String, default: "", trim: true }, parking: { type: String, default: "", trim: true }, furnishing: { type: String, enum: ["Unfurnished", "Semi-Furnished", "Fully Furnished"] }, petFriendly: { type: Boolean }, nonVegAllowed: { type: Boolean }, contactType: { type: String, enum: ["Owner", "Broker"] } }, { _id: false });
 
 const possessionDetailsSchema = new mongoose.Schema(
   {
     status: {
       type: String,
       enum: ["Ready to Move", "Under Construction", "New Launch"],
-      required: true,
     },
     launchDate: { type: String, default: "" },
     expectedCompletionDate: { type: String, default: "" },
@@ -212,9 +210,9 @@ const reviewMessageSchema = new mongoose.Schema(
 
 const propertySchema = new mongoose.Schema(
   {
-    title: { type: String, required: true, trim: true },
+    title: { type: String, trim: true },
     subtitle: { type: String, default: "", trim: true },
-    price: { type: String, required: true },
+    price: { type: String },
     pricePerSqft: { type: String, default: "" },
     priceValue: { type: Number, default: 0 }, // numeric price for range filtering/sorting in /api/search
     configs: [{ type: String }],
@@ -260,7 +258,7 @@ const propertySchema = new mongoose.Schema(
     floorLabel: { type: String, default: "", trim: true },
     totalFloors: { type: Number, min: 1 },
     transactionType: { type: String, default: "" },
-    listingType: { type: String, enum: ["For Sale", "For Rent"], default: "For Sale" },
+    listingType: { type: String, enum: ["For Sale", "For Rent"] },
     submittedBy: { type: String, enum: ["user", "admin"], default: "admin" },
     ageOfProperty: { type: String, default: "" },
     heroImages: {

@@ -63,20 +63,25 @@ function presentProperty(property) {
   return { ...visibleProperty, id: source._id.toString() };
 }
 
-const publicSubmissionValidation = [
-  body("title").trim().notEmpty().withMessage("Title is required"),
-  body("price").custom((value, { req }) => {
-    if (typeof value === "string" && value.trim()) return true;
-    if (req.body.propertyType === "Apartment" && Array.isArray(req.body.configurationDetails)) return true;
-    if (req.body.propertyType === "Villa" && Array.isArray(req.body.villaDetails?.configurationDetails)) return true;
-    if (req.body.propertyType === "Plot" && Array.isArray(req.body.plotDetails?.plotSizeDetails)) return true;
-    if (req.body.propertyType === "Commercial" && req.body.commercialDetails) return true;
-    if (req.body.propertyType === "PG/Co-living" && req.body.pgDetails) return true;
-    if (req.body.propertyType === "Rent" && req.body.rentDetails) return true;
-    if (req.body.propertyType === "Lease" && req.body.leaseDetails) return true;
-    throw new Error("Price is required");
-  }),
-];
+function compactPropertyPayload(value) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "string") return value.trim() || undefined;
+  if (Array.isArray(value)) {
+    const entries = value.map(compactPropertyPayload).filter((item) => item !== undefined);
+    return entries.length ? entries : undefined;
+  }
+  if (typeof value === "object") {
+    const entries = Object.entries(value)
+      .map(([key, item]) => [key, compactPropertyPayload(item)])
+      .filter(([, item]) => item !== undefined);
+    return entries.length ? Object.fromEntries(entries) : undefined;
+  }
+  return value;
+}
+
+function prepareOptionalPropertyPayload(body) {
+  return compactPropertyPayload(withoutWorkflowFields(body)) || {};
+}
 
 // ─── GET /api/properties ────────────────────────────────────────
 // List properties (public, with optional filters & pagination)
@@ -354,16 +359,14 @@ router.put(
   }
 );
 
-router.put("/my/:id/resubmit", auth, customerOnly, publicSubmissionValidation, async (req, res) => {
+router.put("/my/:id/resubmit", auth, customerOnly, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
     const property = await Property.findOne({ _id: req.params.id, postedBy: req.user._id, submittedBy: "user" });
     if (!property) return res.status(404).json({ error: "Property not found" });
     if (!["draft", "changes_requested"].includes(property.status)) {
       return res.status(409).json({ error: "This property cannot be resubmitted in its current status" });
     }
-    const normalized = normalizeStructuredPayload(withoutWorkflowFields(req.body), { requireStructured: true });
+    const normalized = prepareOptionalPropertyPayload(req.body);
     property.set(await convertPropertyMedia(normalized));
     property.status = property.status === "draft" ? "submitted" : "resubmitted";
     property.published = false;
@@ -417,28 +420,9 @@ router.post(
   "/",
   auth,
   adminOnly,
-  [
-    body("title").trim().notEmpty().withMessage("Title is required"),
-    body("price").custom((value, { req }) => {
-      if (typeof value === "string" && value.trim()) return true;
-      if (req.body.propertyType === "Apartment" && Array.isArray(req.body.configurationDetails)) return true;
-      if (req.body.propertyType === "Villa" && Array.isArray(req.body.villaDetails?.configurationDetails)) return true;
-      if (req.body.propertyType === "Plot" && Array.isArray(req.body.plotDetails?.plotSizeDetails)) return true;
-      if (req.body.propertyType === "Commercial" && req.body.commercialDetails) return true;
-      if (req.body.propertyType === "PG/Co-living" && req.body.pgDetails) return true;
-      if (req.body.propertyType === "Rent" && req.body.rentDetails) return true;
-      if (req.body.propertyType === "Lease" && req.body.leaseDetails) return true;
-      throw new Error("Price is required");
-    }),
-  ],
   async (req, res) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg });
-      }
-
-      const normalizedBody = normalizeStructuredPayload(req.body, { requireStructured: true });
+      const normalizedBody = prepareOptionalPropertyPayload(req.body);
       const propertyData = {
         ...(await convertPropertyMedia(normalizedBody)),
         postedBy: req.user._id,
@@ -466,14 +450,9 @@ router.put(
   "/:id",
   auth,
   adminOnly,
-  [body("title").optional().trim().notEmpty().withMessage("Title cannot be empty")],
   async (req, res) => {
     try {
       assertPhotoOnlyMedia(req.body);
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg });
-      }
 
       const existing = await Property.findById(req.params.id);
       if (!existing) {
@@ -485,51 +464,7 @@ router.put(
         dealerId: existing.dealerId,
       };
 
-      const finalType = req.body.propertyType ?? existing.propertyType;
-      const converted = await convertPropertyMedia(req.body);
-      const hasStructuredApartment = Boolean(existing.configurationDetails?.length) || "configurationDetails" in req.body;
-      const hasStructuredVilla = Boolean(existing.villaDetails?.configurationDetails?.length) || "villaDetails" in req.body;
-      const hasStructuredPlot = Boolean(existing.plotDetails?.plotSizeDetails?.length) || "plotDetails" in req.body;
-      const hasStructuredCommercial = Boolean(existing.commercialDetails) || "commercialDetails" in req.body;
-      const hasStructuredPg = Boolean(existing.pgDetails?.sharingDetails?.length) || "pgDetails" in req.body;
-      const hasStructuredRent = Boolean(existing.rentDetails) || "rentDetails" in req.body;
-      let updates = converted;
-      if (finalType === "Apartment" && hasStructuredApartment) {
-        updates = normalizeApartmentPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
-      } else if (finalType === "Villa" && hasStructuredVilla) {
-        updates = normalizeVillaPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
-      } else if (finalType === "Plot" && hasStructuredPlot) {
-        updates = normalizePlotPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
-      } else if (finalType === "Commercial" && hasStructuredCommercial) {
-        updates = normalizeCommercialPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
-      } else if (finalType === "PG/Co-living" && hasStructuredPg) {
-        updates = normalizePgPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
-      } else if (finalType === "Rent" && hasStructuredRent) updates = normalizeRentPayload({ ...existing.toObject(), ...converted }, { requireStructured: true });
-      else if ("propertyType" in req.body && !["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living", "Rent"].includes(finalType)) {
-        updates = {
-          ...updates,
-          configurationDetails: undefined,
-          villaDetails: undefined,
-          plotDetails: undefined,
-          commercialDetails: undefined,
-          pgDetails: undefined,
-          rentDetails: undefined,
-          possessionDetails: undefined,
-          floorLabel: undefined,
-          totalFloors: undefined,
-        };
-      }
-      if (finalType === "Apartment" && !hasStructuredApartment) {
-        if (req.body.reraRegistered === false) updates = { ...updates, reraNumber: "" };
-        if (req.body.transactionType === "Resale") updates = { ...updates, bookingAmount: "" };
-      }
-      if (finalType === "Villa" && !hasStructuredVilla && req.body.reraRegistered === false) {
-        updates = { ...updates, reraNumber: "" };
-      }
-      if (finalType === "Plot" && !hasStructuredPlot && req.body.reraRegistered === false) {
-        updates = { ...updates, reraNumber: "" };
-      }
-      if (finalType === "Commercial" && !hasStructuredCommercial && req.body.reraRegistered === false) updates = { ...updates, reraNumber: "" };
+      const updates = await convertPropertyMedia(prepareOptionalPropertyPayload(req.body));
       existing.set(updates);
       const property = await existing.save();
 
@@ -582,15 +517,9 @@ router.post(
   "/public",
   auth,
   customerOnly,
-  publicSubmissionValidation,
   async (req, res) => {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg });
-      }
-
-      const normalizedBody = normalizeStructuredPayload(withoutWorkflowFields(req.body), { requireStructured: true });
+      const normalizedBody = prepareOptionalPropertyPayload(req.body);
       const propertyData = {
         ...(await convertPropertyMedia(normalizedBody)),
         published: false,
@@ -616,11 +545,9 @@ router.post(
   }
 );
 
-router.post("/draft", auth, customerOnly, publicSubmissionValidation, async (req, res) => {
+router.post("/draft", auth, customerOnly, async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
-    const normalizedBody = normalizeStructuredPayload(withoutWorkflowFields(req.body), { requireStructured: true });
+    const normalizedBody = prepareOptionalPropertyPayload(req.body);
     const property = await Property.create({
       ...(await convertPropertyMedia(normalizedBody)),
       published: false,
