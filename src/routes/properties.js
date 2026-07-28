@@ -143,6 +143,14 @@ function prepareSubmittedPropertyPayload(body, existing) {
   return existing ? compact : withoutWorkflowFields(candidate);
 }
 
+function includeAdminWorkflowFields(payload, body) {
+  const updates = { ...payload };
+  for (const key of ["status", "published", "verified"]) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) updates[key] = body[key];
+  }
+  return updates;
+}
+
 // ─── GET /api/properties ────────────────────────────────────────
 // List properties (public, with optional filters & pagination)
 router.get("/", async (req, res) => {
@@ -575,7 +583,8 @@ router.put(
         builderId: existing.builderId,
       };
 
-      const updates = await convertPropertyMedia(prepareSubmittedPropertyPayload(req.body, existing));
+      const normalizedUpdates = prepareSubmittedPropertyPayload(req.body, existing);
+      const updates = await convertPropertyMedia(includeAdminWorkflowFields(normalizedUpdates, req.body));
       existing.set(updates);
       const property = await existing.save();
 

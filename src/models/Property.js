@@ -302,7 +302,7 @@ const propertySchema = new mongoose.Schema(
     floorLabel: { type: String, default: "", trim: true },
     totalFloors: { type: Number, min: 1 },
     transactionType: { type: String, default: "" },
-    listingType: { type: String, enum: ["For Sale", "For Rent"] },
+    listingType: { type: String, enum: ["For Sale", "For Rent"], default: "For Sale" },
     submittedBy: { type: String, enum: ["user", "admin"], default: "admin" },
     ageOfProperty: { type: String, default: "" },
     heroImages: {
