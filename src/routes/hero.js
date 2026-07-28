@@ -249,9 +249,11 @@ async function prepareBannerInput(body, { partial = false, currentBanner = null 
 router.get("/banners", async (req, res) => {
   try {
     const activeBanners = await HeroBanner.find({ published: true, displayOnHomepage: { $ne: false } }).lean();
-    const banners = activeBanners
-      .filter((banner) => promotionRank(banner.promotionSlot))
-      .sort((a, b) => promotionRank(a.promotionSlot) - promotionRank(b.promotionSlot));
+    const banners = activeBanners.sort((a, b) => {
+      const orderDifference = (Number(a.order) || 0) - (Number(b.order) || 0);
+      if (orderDifference) return orderDifference;
+      return new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
+    });
     const propertyIds = banners.map((banner) => banner.propertyId).filter(Boolean);
     const properties = propertyIds.length
       ? await Property.find({ _id: { $in: propertyIds } }).lean()
@@ -264,7 +266,7 @@ router.get("/banners", async (req, res) => {
       }))
       .filter(({ banner, property }) => !banner.propertyId || isPublishedProperty(property))
       .map(({ banner, property }) => presentBanner(
-        banner.promotionSlot && property
+        property
           ? resolvePromotionBanner(banner, property)
           : { ...propertyDefaults(property), ...banner }
       ));

@@ -121,6 +121,12 @@ function hasStructuredDetails(body) {
 function prepareSubmittedPropertyPayload(body, existing) {
   const compact = prepareOptionalPropertyPayload(body);
   if (Object.prototype.hasOwnProperty.call(body, "builderId")) compact.builderId = body.builderId || null;
+  if (Object.prototype.hasOwnProperty.call(body, "homepageSections")) {
+    if (!Array.isArray(body.homepageSections)) {
+      throw new PropertyPayloadError("Homepage sections must be an array");
+    }
+    compact.homepageSections = [...new Set(body.homepageSections.map(String))];
+  }
   const candidate = existing
     ? { ...withoutWorkflowFields(existing.toObject()), ...compact, propertyType: compact.propertyType || existing.propertyType }
     : compact;

@@ -289,6 +289,13 @@ const propertySchema = new mongoose.Schema(
       enum: ["Handpicked", "Newly Launched", "Search Trends", "Offers", "Featured", "Recommended Insights", "None"], 
       default: "None" 
     },
+    homepageSections: {
+      type: [{
+        type: String,
+        enum: ["Recommended", "Handpicked", "Newly Launched", "Search Trends", "Offers", "Newly Listed", "Featured"],
+      }],
+      default: [],
+    },
 
     // Extended fields
     description: { type: String, default: "" },

@@ -5,13 +5,13 @@ const Property = require("../src/models/Property");
 const { createAdminToken } = require("./helpers");
 
 describe("Hero Banners API", () => {
-  it("returns no custom public banners until an active ranked property is assigned", async () => {
+  it("returns every active banner in configured order without ranked slots", async () => {
     await HeroBanner.create({ image: "a.jpg", title: "A", order: 2, published: true });
     await HeroBanner.create({ image: "b.jpg", title: "B", order: 1, published: true });
     await HeroBanner.create({ image: "c.jpg", title: "C", order: 0, published: false });
     const res = await request(app).get("/api/hero/banners");
     expect(res.status).toBe(200);
-    expect(res.body.banners).toEqual([]);
+    expect(res.body.banners.map((banner) => banner.title)).toEqual(["B", "A"]);
   });
 
   it("rejects create without an admin token", async () => {
@@ -154,15 +154,16 @@ describe("Hero Banners API", () => {
     await Property.findByIdAndUpdate(property._id, { title: "Updated title", price: "₹1.1 Cr" });
     const publicRes = await request(app).get("/api/hero/banners");
 
-    expect(publicRes.body.banners).toHaveLength(1);
-    expect(publicRes.body.banners[0]).toMatchObject({
+    expect(publicRes.body.banners).toHaveLength(2);
+    const promoted = publicRes.body.banners.find((banner) => banner.propertyId === property._id.toString());
+    expect(promoted).toMatchObject({
       promotionSlot: "gold",
       rank: 2,
       title: "Updated title",
       priceText: "Special ₹95 Lac",
       image: "promotion.jpg",
     });
-    expect(publicRes.body.banners[0].resolvedDetails.configuration).toBe("2 BHK");
+    expect(promoted.resolvedDetails.configuration).toBe("2 BHK");
   });
 
   it("prevents duplicate slot and property assignments while allowing other slots to remain empty", async () => {
@@ -194,7 +195,7 @@ describe("Hero Banners API", () => {
     expect(publicRes.body.banners.map((banner) => banner.promotionSlot)).toEqual(["diamond"]);
   });
 
-  it("rotates only the independently active ranked properties in rank order", async () => {
+  it("rotates ranked and unranked homepage properties together", async () => {
     const diamondProperty = await Property.create({ title: "Diamond Property", price: "₹3 Cr", image: "diamond.jpg", status: "approved", published: true });
     const silverProperty = await Property.create({ title: "Silver Property", price: "₹1 Cr", image: "silver.jpg", status: "approved", published: true });
     await HeroBanner.create({
@@ -220,8 +221,8 @@ describe("Hero Banners API", () => {
     const res = await request(app).get("/api/hero/banners");
 
     expect(res.status).toBe(200);
-    expect(res.body.banners.map((banner) => banner.promotionSlot)).toEqual(["diamond", "silver"]);
-    expect(res.body.banners.map((banner) => banner.title)).toEqual(["Diamond Property", "Silver Property"]);
+    expect(res.body.banners).toHaveLength(3);
+    expect(res.body.banners.map((banner) => banner.title)).toEqual(expect.arrayContaining(["Diamond Property", "Silver Property", "Legacy"]));
   });
 
   it("updates banner order via PATCH /:id/order", async () => {

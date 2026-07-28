@@ -21,4 +21,25 @@ describe("Property publish/feature flags", () => {
     expect(res.body.property.published).toBe(false);
     expect(res.body.property.featured).toBe(true);
   });
+
+  it("persists and clears multiple homepage placements", async () => {
+    const { token } = await createAdminToken();
+    const p = await Property.create({ title: "Placed property", price: "1" });
+
+    const placed = await request(app)
+      .put(`/api/properties/${p._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ homepageSections: ["Handpicked", "Offers", "Handpicked"] });
+
+    expect(placed.status).toBe(200);
+    expect(placed.body.property.homepageSections).toEqual(["Handpicked", "Offers"]);
+
+    const cleared = await request(app)
+      .put(`/api/properties/${p._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ homepageSections: [] });
+
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.property.homepageSections).toEqual([]);
+  });
 });
