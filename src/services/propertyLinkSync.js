@@ -1,5 +1,4 @@
 const Builder = require("../models/Builder");
-const Dealer = require("../models/Dealer");
 const Property = require("../models/Property");
 
 async function decrementBuilderCount(builderId) {
@@ -10,25 +9,17 @@ async function linkProperty(property) {
   if (property.builderId) {
     await Builder.findByIdAndUpdate(property.builderId, { $inc: { projectCount: 1 } });
   }
-  if (property.dealerId) {
-    await Dealer.findByIdAndUpdate(property.dealerId, { $addToSet: { propertyIds: property._id } });
-  }
 }
 
 async function unlinkProperty(property) {
   if (property.builderId) {
     await decrementBuilderCount(property.builderId);
   }
-  if (property.dealerId) {
-    await Dealer.findByIdAndUpdate(property.dealerId, { $pull: { propertyIds: property._id } });
-  }
 }
 
-async function relinkProperty(oldProperty, newBuilderId, newDealerId) {
+async function relinkProperty(oldProperty, newBuilderId) {
   const oldBuilderId = oldProperty.builderId ? oldProperty.builderId.toString() : null;
-  const oldDealerId = oldProperty.dealerId ? oldProperty.dealerId.toString() : null;
   const nextBuilderId = newBuilderId ? newBuilderId.toString() : null;
-  const nextDealerId = newDealerId ? newDealerId.toString() : null;
 
   if (oldBuilderId !== nextBuilderId) {
     if (oldBuilderId) {
@@ -36,15 +27,6 @@ async function relinkProperty(oldProperty, newBuilderId, newDealerId) {
     }
     if (nextBuilderId) {
       await Builder.findByIdAndUpdate(nextBuilderId, { $inc: { projectCount: 1 } });
-    }
-  }
-
-  if (oldDealerId !== nextDealerId) {
-    if (oldDealerId) {
-      await Dealer.findByIdAndUpdate(oldDealerId, { $pull: { propertyIds: oldProperty._id } });
-    }
-    if (nextDealerId) {
-      await Dealer.findByIdAndUpdate(nextDealerId, { $addToSet: { propertyIds: oldProperty._id } });
     }
   }
 }

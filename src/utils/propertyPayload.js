@@ -11,7 +11,7 @@ const FACING_OPTIONS = new Set([
 const VILLA_TYPES = new Set(["Independent", "Row Villa", "Twin Villa"]);
 const VILLA_POSSESSION_STATUSES = new Set(["Ready to Move", "Under Construction"]);
 const FURNISHING_OPTIONS = new Set(["Unfurnished", "Semi-Furnished", "Fully Furnished"]);
-const PLOT_APPROVAL_AUTHORITIES = new Set(["BMRDA", "BDA", "DTCP", "Panchayat"]);
+const PLOT_APPROVAL_AUTHORITIES = new Set(["BMRDA", "BDA", "BBMP", "DTCP", "Panchayat", "MPA"]);
 const PLOT_LAYOUT_STATUSES = new Set(["Layout Ready", "Under Development"]);
 const PLOT_INVENTORY_STATUSES = new Set(["Available", "Booked", "Sold"]);
 const COMMERCIAL_SUBTYPES = new Set(["Office Space", "Shop/Showroom", "Warehouse", "Industrial Shed", "Co-working"]);
@@ -22,6 +22,24 @@ const COMMERCIAL_FURNISHING = new Set(["Bare Shell", "Warm Shell", "Fully Furnis
 const PG_SHARING_TYPES = new Set(["Single occupancy", "Double sharing", "Triple sharing", "Four sharing"]);
 const ROOM_CATEGORIES = new Set(["bedroom", "bathroom", "kitchen", "living", "dining", "balcony", "utility", "other"]);
 const FACILITY_STATUSES = new Set(["Available", "Planned", "Under Construction"]);
+const RERA_DOCUMENTS = new Map([
+  ["registration-certificate", ["Registration Certificate", "Annexure 1"]],
+  ["certificate-of-incorporation", ["Certificate of Incorporation", ""]],
+  ["memorandum-of-association", ["Memorandum of Association", "Annexure 15"]],
+  ["articles-of-association", ["Articles of Association", "Annexure 16"]],
+  ["pan-card", ["PAN Card", "Annexure 2"]],
+]);
+const PROJECT_DOCUMENTS = new Map([
+  ["commencement-certificate", ["Commencement Certificate", "Annexure 80"]],
+  ["approved-building-plan", ["Approved Building Plan", "Annexure 81"]],
+  ["sectional-drawing", ["Sectional Drawing of the Apartments", "Annexure 82"]],
+  ["structural-safety-certificate", ["Structural Safety Certificate from Registered Engineer", "Annexure 83"]],
+  ["project-specifications", ["Project Specifications", "Annexure 84"]],
+  ["brochure", ["Brochure", "Annexure 85"]],
+  ["relinquishment-deed", ["Relinquishment Deed", "Annexure 86"]],
+  ["agreement-for-sale", ["Proforma of Agreement for Sale", "Annexure 87"]],
+  ["allotment-letter", ["Proforma of Allotment Letter", "Annexure 88"]],
+]);
 
 class PropertyPayloadError extends Error {
   constructor(message) {
@@ -168,18 +186,89 @@ function validateLocalityAndNearby(payload) {
 
 function validateSharedStructuredFields(payload, propertyLabel) {
   if (payload.reraRegistered) {
-    const reraNumber = String(payload.reraNumber || "").trim();
-    if (["Villa", "Plot", "Commercial"].includes(propertyLabel) && !/^[A-Za-z0-9/._-]{8,50}$/.test(reraNumber)) {
-      throw new PropertyPayloadError(`${propertyLabel} RERA number must be 8-50 characters using letters, numbers, /, ., _, or -`);
-    }
-    if (!["Villa", "Plot", "Commercial"].includes(propertyLabel) && !reraNumber) {
-      throw new PropertyPayloadError(`RERA number is required for a RERA-registered ${propertyLabel}`);
-    }
-    payload.reraNumber = reraNumber;
+    payload.reraPhases = normalizeReraPhases(payload.reraPhases, payload.reraNumber, propertyLabel);
+    payload.reraNumber = payload.reraPhases[0].reraNumber;
   } else {
     payload.reraNumber = "";
+    payload.reraPhases = [];
   }
   validateLocalityAndNearby(payload);
+}
+
+function normalizeReraDocuments(documents, allowed, groupLabel) {
+  if (!Array.isArray(documents)) return [];
+  const seen = new Set();
+  return documents.map((document, index) => {
+    const key = String(document?.key || "").trim();
+    if (!allowed.has(key) || seen.has(key)) {
+      throw new PropertyPayloadError(`${groupLabel} document types must be valid and unique`);
+    }
+    seen.add(key);
+    const [label, annexure] = allowed.get(key);
+    const fileUrl = String(document.fileUrl || "").trim();
+    if (!isHttpUrl(fileUrl) || new URL(fileUrl).hostname !== "res.cloudinary.com") {
+      throw new PropertyPayloadError(`${label} requires a file uploaded through ClearTitle`);
+    }
+    const mimeType = String(document.mimeType || "").toLowerCase();
+    if (!["application/pdf", "image/jpeg", "image/png"].includes(mimeType)) {
+      throw new PropertyPayloadError(`${label} must be a PDF, JPG, or PNG document`);
+    }
+    const fileSize = Number(document.fileSize);
+    if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > 15 * 1024 * 1024) {
+      throw new PropertyPayloadError(`${label} must be no larger than 15 MB`);
+    }
+    return {
+      ...(document._id ? { _id: document._id } : {}),
+      key,
+      label,
+      annexure,
+      fileName: requireText(document.fileName, `${label} filename`).slice(0, 255),
+      fileUrl,
+      mimeType,
+      fileSize,
+      uploadedAt: document.uploadedAt || new Date(),
+      order: index,
+    };
+  });
+}
+
+function normalizeReraPhases(phases, legacyNumber, propertyLabel) {
+  const source = Array.isArray(phases) && phases.length
+    ? phases
+    : legacyNumber
+      ? [{ name: "Phase 1", reraNumber: legacyNumber, reraDocuments: [], projectDocuments: [] }]
+      : [];
+  if (!source.length) throw new PropertyPayloadError(`RERA number and at least one RERA phase are required for this ${propertyLabel}`);
+  const seenNames = new Set();
+  const seenNumbers = new Set();
+  return source.map((phase, index) => {
+    const name = requireText(phase?.name, `RERA phase ${index + 1} name`).slice(0, 100);
+    const reraNumber = requireText(phase?.reraNumber, `${name} RERA number`);
+    if (!/^[A-Za-z0-9/._-]{8,50}$/.test(reraNumber)) {
+      throw new PropertyPayloadError(`${name} RERA number must be 8-50 characters using letters, numbers, /, ., _, or -`);
+    }
+    const nameKey = name.toLowerCase();
+    const numberKey = reraNumber.toLowerCase();
+    if (seenNames.has(nameKey) || seenNumbers.has(numberKey)) {
+      throw new PropertyPayloadError("RERA phase names and registration numbers must be unique");
+    }
+    seenNames.add(nameKey);
+    seenNumbers.add(numberKey);
+    const reraSiteUrl = String(phase.reraSiteUrl || "").trim();
+    if (reraSiteUrl && !isHttpUrl(reraSiteUrl)) throw new PropertyPayloadError(`${name} RERA website must be a valid HTTP(S) URL`);
+    const panNumber = String(phase.panNumber || "").trim().toUpperCase();
+    if (panNumber && !/^[A-Z]{5}\d{4}[A-Z]$/.test(panNumber)) throw new PropertyPayloadError(`${name} PAN must use the format AAAAA9999A`);
+    return {
+      ...(phase._id ? { _id: phase._id } : {}),
+      name,
+      reraNumber,
+      reraSiteUrl,
+      panNumber,
+      order: index,
+      reraDocuments: normalizeReraDocuments(phase.reraDocuments, RERA_DOCUMENTS, "RERA"),
+      projectDocuments: normalizeReraDocuments(phase.projectDocuments, PROJECT_DOCUMENTS, "Project"),
+    };
+  });
 }
 
 function deriveRange(rows, field) {
@@ -443,8 +532,6 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   payload.ownershipType = undefined;
   payload.overlooking = undefined;
   payload.bookingAmount = payload.transactionType === "Resale" ? "" : payload.bookingAmount;
-  payload.maintenanceCharges = undefined;
-  payload.maintenancePeriod = undefined;
   payload.configs = rows.map((row) => row.configuration);
   payload.price = deriveRange(rows, "price") || payload.price;
   payload.area = deriveRange(rows, "superArea") || deriveRange(rows, "builtUpArea") || payload.area;
@@ -535,7 +622,10 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
     if (!PLOT_INVENTORY_STATUSES.has(item.status)) throw new PropertyPayloadError(`Plot ${plotNumber} must have a valid inventory status`);
     return { plotNumber, plotSize, facing: item.facing, status: item.status, isCorner: requireBoolean(item.isCorner, `Plot ${plotNumber} corner flag`) };
   });
-  if (!PLOT_APPROVAL_AUTHORITIES.has(details.approvalAuthority)) throw new PropertyPayloadError("A valid layout approval authority is required");
+  const approvalAuthority = requireText(details.approvalAuthority, "Layout approval authority").slice(0, 120);
+  if (!PLOT_APPROVAL_AUTHORITIES.has(approvalAuthority) && approvalAuthority.length < 2) {
+    throw new PropertyPayloadError("Enter a valid custom layout approval authority");
+  }
   if (!["image", "pdf"].includes(details.layoutMapType) || !isHttpUrl(details.layoutMapUrl)) {
     throw new PropertyPayloadError("A valid master plan or layout-map upload is required");
   }
@@ -567,7 +657,7 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
   payload.plotDetails = {
     plotSizeDetails: rows,
     totalPlots,
-    approvalAuthority: details.approvalAuthority,
+    approvalAuthority,
     approvalNumber: String(details.approvalNumber || "").trim(),
     roadWidth,
     civicInfrastructure: { undergroundDrainage: civic.undergroundDrainage, electricity: civic.electricity, water: civic.water },
@@ -590,8 +680,6 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
   payload.ownershipType = undefined;
   payload.overlooking = undefined;
   payload.bookingAmount = undefined;
-  payload.maintenanceCharges = undefined;
-  payload.maintenancePeriod = undefined;
   payload.furnishing = undefined;
   payload.parking = undefined;
   payload.configs = rows.map((row) => row.plotSize);
@@ -674,7 +762,7 @@ function normalizePgPayload(input, { requireStructured = false } = {}) {
   if (!["Owner", "PG Manager", "Company-run"].includes(details.contactType)) throw new PropertyPayloadError("Select a valid owner/manager contact type");
   validateSharedStructuredFields(payload, "PG / Co-living");
   payload.pgDetails = { genderPreference: details.genderPreference, sharingDetails: rows, mealsIncluded: details.mealsIncluded, foodType: hasMeals ? details.foodType : "", wifiIncluded: requireBoolean(details.wifiIncluded, "Wi-Fi included"), laundryIncluded: requireBoolean(details.laundryIncluded, "Laundry included"), laundrySchedule: details.laundryIncluded ? String(details.laundrySchedule).trim() : "", housekeeping: String(details.housekeeping || "").trim(), curfewEntryTiming: String(details.curfewEntryTiming || "").trim(), visitorsAllowed: String(details.visitorsAllowed || "").trim(), noticePeriod: String(details.noticePeriod || "").trim(), lockInPeriod: String(details.lockInPeriod || "").trim(), idProofRequired: String(details.idProofRequired || "").trim(), utilitiesIncluded: String(details.utilitiesIncluded || "").trim(), availableFrom: details.availableFrom, commonAmenities: Array.isArray(details.commonAmenities) ? [...new Set(details.commonAmenities.map(String))] : [], contactType: details.contactType };
-  payload.configurationDetails = undefined; payload.villaDetails = undefined; payload.plotDetails = undefined; payload.commercialDetails = undefined; payload.possessionDetails = undefined; payload.bedrooms = undefined; payload.bathrooms = undefined; payload.floorLabel = undefined; payload.totalFloors = undefined; payload.furnishing = undefined; payload.parking = undefined; payload.facing = undefined; payload.reraRegistered = false; payload.reraNumber = ""; payload.configs = rows.map((row) => row.sharingType); payload.price = `₹${Math.min(...rows.map((row) => row.rentPerBed)).toLocaleString("en-IN")}/month`; payload.pricePerSqft = ""; payload.area = ""; payload.possession = `Available from ${details.availableFrom}`; payload.ageOfProperty = ""; return payload;
+  payload.configurationDetails = undefined; payload.villaDetails = undefined; payload.plotDetails = undefined; payload.commercialDetails = undefined; payload.possessionDetails = undefined; payload.bedrooms = undefined; payload.bathrooms = undefined; payload.floorLabel = undefined; payload.totalFloors = undefined; payload.furnishing = undefined; payload.parking = undefined; payload.facing = undefined; payload.configs = rows.map((row) => row.sharingType); payload.price = `₹${Math.min(...rows.map((row) => row.rentPerBed)).toLocaleString("en-IN")}/month`; payload.pricePerSqft = ""; payload.area = ""; payload.possession = `Available from ${details.availableFrom}`; payload.ageOfProperty = ""; return payload;
 }
 function getBrokerageBadges(badges, contactType) {
   const nextBadges = (badges || []).filter((badge) => badge !== "Zero Brokerage");
@@ -699,27 +787,21 @@ function normalizeRentPayload(input, { requireStructured = false } = {}) {
 
   const monthlyRent = requireInteger(details.monthlyRent, "Monthly rent", 1);
   const securityDeposit = requireInteger(details.securityDeposit, "Security deposit", 0);
-  if (!["Included", "Extra"].includes(details.maintenanceMode)) {
-    throw new PropertyPayloadError("Select a maintenance mode");
-  }
-  const maintenanceAmount = details.maintenanceMode === "Extra"
-    ? requireInteger(details.maintenanceAmount, "Maintenance amount", 1)
-    : 0;
-
   if (!isCalendarDate(details.availableFrom)) {
     throw new PropertyPayloadError("Available-from date is required");
   }
   if (!["Owner", "Broker"].includes(details.contactType)) {
     throw new PropertyPayloadError("Select Owner or Broker");
   }
-  validateLocalityAndNearby(payload);
+  validateSharedStructuredFields(payload, "Rent");
 
   payload.rentDetails = {
     ...details,
     configuration,
     monthlyRent,
     securityDeposit,
-    maintenanceAmount,
+    maintenanceMode: undefined,
+    maintenanceAmount: undefined,
     preferredTenantTypes: Array.isArray(details.preferredTenantTypes)
       ? [...new Set(details.preferredTenantTypes.map(String))]
       : [],
@@ -731,8 +813,6 @@ function normalizeRentPayload(input, { requireStructured = false } = {}) {
   payload.commercialDetails = undefined;
   payload.pgDetails = undefined;
   payload.possessionDetails = undefined;
-  payload.reraRegistered = false;
-  payload.reraNumber = "";
   payload.configs = [configuration];
   payload.price = `₹${monthlyRent.toLocaleString("en-IN")}/month`;
   payload.area = details.superArea || details.carpetArea || "";
@@ -769,9 +849,9 @@ function normalizeLeasePayload(input, { requireStructured = false } = {}) {
   if (!["Owner", "Broker"].includes(details.contactType)) {
     throw new PropertyPayloadError("Select Owner or Broker");
   }
-  validateLocalityAndNearby(payload);
+  validateSharedStructuredFields(payload, "Lease");
 
-  payload.leaseDetails = { ...details, leaseRent, securityDeposit };
+  payload.leaseDetails = { ...details, leaseRent, securityDeposit, camCharges: undefined };
   payload.listingType = "For Rent";
   payload.price = `₹${leaseRent.toLocaleString("en-IN")}/month`;
   payload.pricePerSqft = details.rentPerSqft ? `₹${details.rentPerSqft}/sqft` : "";
@@ -785,8 +865,6 @@ function normalizeLeasePayload(input, { requireStructured = false } = {}) {
   payload.pgDetails = undefined;
   payload.rentDetails = undefined;
   payload.possessionDetails = undefined;
-  payload.reraRegistered = false;
-  payload.reraNumber = "";
   payload.badges = getBrokerageBadges(payload.badges, details.contactType);
   return payload;
 }

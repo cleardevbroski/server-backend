@@ -44,13 +44,28 @@ const KINDS = {
     folder: "clear-title/lawyers/documents",
     requiresAdmin: true,
   },
+  "rera-document-image": {
+    mime: new Set(["image/jpeg", "image/png"]),
+    maxBytes: 15 * 1024 * 1024,
+    resourceType: "image",
+    folder: "clear-title/properties/rera-documents",
+    requiresAuth: true,
+  },
+  "rera-document-pdf": {
+    mime: new Set(["application/pdf"]),
+    maxBytes: 15 * 1024 * 1024,
+    resourceType: "raw",
+    folder: "clear-title/properties/rera-documents",
+    requiresAuth: true,
+  },
 };
 
 router.post("/", (req, res, next) => {
   const rules = KINDS[req.query.kind];
   if (!rules) return res.status(400).json({ error: "Invalid media kind" });
-  if (!rules.requiresAdmin) return next();
-  return auth(req, res, () => adminOnly(req, res, next));
+  if (rules.requiresAdmin) return auth(req, res, () => adminOnly(req, res, next));
+  if (rules.requiresAuth) return auth(req, res, next);
+  return next();
 }, async (req, res) => {
   const rules = KINDS[req.query.kind];
   const mime = String(req.headers["content-type"] || "").split(";")[0].toLowerCase();

@@ -1,6 +1,7 @@
 const express = require("express");
 const { body, query, validationResult } = require("express-validator");
 const Property = require("../models/Property");
+const Lead = require("../models/Lead");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const customerOnly = require("../middleware/customerOnly");
@@ -54,12 +55,31 @@ function withoutWorkflowFields(body) {
   for (const key of ["_id", "id", "postedBy", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt"]) {
     delete clean[key];
   }
+  delete clean.maintenanceCharges;
+  delete clean.maintenancePeriod;
+  delete clean.dealerId;
+  if (clean.rentDetails) {
+    clean.rentDetails = { ...clean.rentDetails };
+    delete clean.rentDetails.maintenanceMode;
+    delete clean.rentDetails.maintenanceAmount;
+  }
+  if (clean.leaseDetails) {
+    clean.leaseDetails = { ...clean.leaseDetails };
+    delete clean.leaseDetails.camCharges;
+  }
   return clean;
 }
 
-function presentProperty(property) {
+function presentProperty(property, { includeDocumentUrls = false } = {}) {
   const source = typeof property.toObject === "function" ? property.toObject() : property;
   const { heroVideo, videos, virtualTourUrl, ...visibleProperty } = source;
+  if (!includeDocumentUrls && Array.isArray(visibleProperty.reraPhases)) {
+    visibleProperty.reraPhases = visibleProperty.reraPhases.map((phase) => ({
+      ...phase,
+      reraDocuments: (phase.reraDocuments || []).map(({ fileUrl, ...document }) => document),
+      projectDocuments: (phase.projectDocuments || []).map(({ fileUrl, ...document }) => document),
+    }));
+  }
   return { ...visibleProperty, id: source._id.toString() };
 }
 
@@ -100,6 +120,7 @@ function hasStructuredDetails(body) {
  * present it is normalized and validated as a complete unit. */
 function prepareSubmittedPropertyPayload(body, existing) {
   const compact = prepareOptionalPropertyPayload(body);
+  if (Object.prototype.hasOwnProperty.call(body, "builderId")) compact.builderId = body.builderId || null;
   const candidate = existing
     ? { ...withoutWorkflowFields(existing.toObject()), ...compact, propertyType: compact.propertyType || existing.propertyType }
     : compact;
@@ -284,7 +305,7 @@ router.get("/admin/property/:id", auth, adminOnly, async (req, res) => {
       .populate("postedBy", "name phone email role")
       .lean();
     if (!property) return res.status(404).json({ error: "Property not found" });
-    return res.json({ property: presentProperty(property) });
+    return res.json({ property: presentProperty(property, { includeDocumentUrls: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
     console.error("Get admin property error:", error);
@@ -311,7 +332,7 @@ router.get("/my/:id", auth, customerOnly, async (req, res) => {
   try {
     const property = await Property.findOne({ _id: req.params.id, postedBy: req.user._id, submittedBy: "user" }).lean();
     if (!property) return res.status(404).json({ error: "Property not found" });
-    return res.json({ property: presentProperty(property) });
+    return res.json({ property: presentProperty(property, { includeDocumentUrls: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
     return res.status(500).json({ error: "Internal server error" });
@@ -343,7 +364,7 @@ router.get("/admin/submissions/:id", auth, adminOnly, async (req, res) => {
       .populate("reviewMessages.sender", "name role")
       .lean();
     if (!property) return res.status(404).json({ error: "Submission not found" });
-    return res.json({ property: presentProperty(property) });
+    return res.json({ property: presentProperty(property, { includeDocumentUrls: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Submission not found" });
     return res.status(500).json({ error: "Internal server error" });
@@ -389,7 +410,7 @@ router.put(
       property.reviewedBy = req.user._id;
       property.reviewedAt = new Date();
       await property.save();
-      return res.json({ message: "Submission updated", property: presentProperty(property) });
+      return res.json({ message: "Submission updated", property: presentProperty(property, { includeDocumentUrls: true }) });
     } catch (error) {
       if (error.name === "CastError") return res.status(404).json({ error: "Submission not found" });
       console.error("Review public submission error:", error);
@@ -415,12 +436,64 @@ router.put("/my/:id/resubmit", auth, customerOnly, async (req, res) => {
     property.rejectionReason = "";
     property.reviewMessages.push({ senderRole: "user", sender: req.user._id, message: "Property details updated and resubmitted." });
     await property.save();
-    return res.json({ message: "Property resubmitted for review", property: presentProperty(property) });
+    return res.json({ message: "Property resubmitted for review", property: presentProperty(property, { includeDocumentUrls: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
     if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
     console.error("Resubmit property error:", error);
     return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// OTP-authenticated RERA/project document download. The permanent Cloudinary
+// URL is never included in the public property payload.
+router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOnly, async (req, res) => {
+  try {
+    if (!req.user.name || !req.user.email) {
+      return res.status(400).json({ error: "Complete your name and email before downloading documents" });
+    }
+    const property = await Property.findOne({
+      _id: req.params.id,
+      $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
+    });
+    if (!property) return res.status(404).json({ error: "Property not found" });
+    const phase = property.reraPhases.id(req.params.phaseId);
+    if (!phase) return res.status(404).json({ error: "RERA phase not found" });
+    const document = phase.reraDocuments.id(req.params.documentId) || phase.projectDocuments.id(req.params.documentId);
+    if (!document) return res.status(404).json({ error: "Document not found" });
+
+    const source = new URL(document.fileUrl);
+    if (source.protocol !== "https:" || source.hostname !== "res.cloudinary.com") {
+      return res.status(409).json({ error: "Document storage location is invalid" });
+    }
+    const upstream = await fetch(source, { redirect: "error" });
+    if (!upstream.ok) return res.status(502).json({ error: "Document is temporarily unavailable" });
+    const bytes = Buffer.from(await upstream.arrayBuffer());
+    if (bytes.length > 15 * 1024 * 1024) return res.status(413).json({ error: "Document exceeds the download limit" });
+
+    await Lead.create({
+      type: "property_interest",
+      name: req.user.name,
+      email: req.user.email,
+      phone: req.user.phone,
+      message: `Verified document download for ${property.title}`,
+      propertyId: property._id.toString(),
+      propertyTitle: property.title,
+      action: "document",
+      phaseName: phase.name,
+      documentName: document.label,
+    });
+
+    const safeName = String(document.fileName || `${document.key}.pdf`).replace(/[^A-Za-z0-9._ -]/g, "_");
+    res.set("Content-Type", document.mimeType);
+    res.set("Content-Length", String(bytes.length));
+    res.set("Content-Disposition", `attachment; filename="${safeName}"`);
+    res.set("Cache-Control", "private, no-store");
+    return res.send(bytes);
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Property document not found" });
+    console.error("Download property document error:", error);
+    return res.status(500).json({ error: "Unable to download document" });
   }
 });
 
@@ -473,7 +546,7 @@ router.post(
 
       return res.status(201).json({
         message: "Property created successfully",
-        property: presentProperty(property),
+        property: presentProperty(property, { includeDocumentUrls: true }),
       });
     } catch (error) {
       if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: error.message });
@@ -500,22 +573,20 @@ router.put(
       const previousLinks = {
         _id: existing._id,
         builderId: existing.builderId,
-        dealerId: existing.dealerId,
       };
 
       const updates = await convertPropertyMedia(prepareSubmittedPropertyPayload(req.body, existing));
       existing.set(updates);
       const property = await existing.save();
 
-      if ("builderId" in req.body || "dealerId" in req.body) {
+      if ("builderId" in req.body) {
         const nextBuilderId = "builderId" in req.body ? req.body.builderId : previousLinks.builderId;
-        const nextDealerId = "dealerId" in req.body ? req.body.dealerId : previousLinks.dealerId;
-        await relinkProperty(previousLinks, nextBuilderId, nextDealerId);
+        await relinkProperty(previousLinks, nextBuilderId);
       }
 
       return res.json({
         message: "Property updated successfully",
-        property: presentProperty(property),
+        property: presentProperty(property, { includeDocumentUrls: true }),
       });
     } catch (error) {
       if (error.name === "CastError") {
@@ -574,7 +645,7 @@ router.post(
 
       return res.status(201).json({
         message: "Property submitted successfully for admin review",
-        property: presentProperty(property),
+        property: presentProperty(property, { includeDocumentUrls: true }),
       });
     } catch (error) {
       if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
@@ -596,7 +667,7 @@ router.post("/draft", auth, customerOnly, async (req, res) => {
       submittedBy: "user",
       postedDate: new Date().toISOString(),
     });
-    return res.status(201).json({ message: "Draft saved", property: presentProperty(property) });
+    return res.status(201).json({ message: "Draft saved", property: presentProperty(property, { includeDocumentUrls: true }) });
   } catch (error) {
     if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: "Internal server error" });

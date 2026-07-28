@@ -137,7 +137,7 @@ const plotDetailsSchema = new mongoose.Schema(
   {
     plotSizeDetails: { type: [plotSizeDetailSchema] },
     totalPlots: { type: Number, min: 1 },
-    approvalAuthority: { type: String, enum: ["BMRDA", "BDA", "DTCP", "Panchayat"] },
+    approvalAuthority: { type: String, trim: true, maxlength: 120 },
     approvalNumber: { type: String, default: "", trim: true },
     roadWidth: { type: String, default: "", trim: true },
     civicInfrastructure: {
@@ -190,7 +190,7 @@ const pgDetailsSchema = new mongoose.Schema({
   wifiIncluded: { type: Boolean }, laundryIncluded: { type: Boolean }, laundrySchedule: { type: String, default: "", trim: true }, housekeeping: { type: String, default: "", trim: true },
   curfewEntryTiming: { type: String, default: "", trim: true }, visitorsAllowed: { type: String, default: "", trim: true }, noticePeriod: { type: String, default: "", trim: true }, lockInPeriod: { type: String, default: "", trim: true }, idProofRequired: { type: String, default: "", trim: true }, utilitiesIncluded: { type: String, default: "", trim: true }, availableFrom: { type: String }, commonAmenities: [{ type: String, trim: true }], contactType: { type: String, enum: ["Owner", "PG Manager", "Company-run"] },
 }, { _id: false });
-const rentDetailsSchema = new mongoose.Schema({ rentalPropertyType: { type: String, enum: ["Apartment", "Villa", "Independent House"] }, configuration: { type: String, trim: true }, monthlyRent: { type: Number, min: 1 }, securityDeposit: { type: Number, min: 0 }, maintenanceMode: { type: String, enum: ["Included", "Extra"] }, maintenanceAmount: { type: Number, min: 0, default: 0 }, availableFrom: { type: String }, lockInPeriod: { type: String, default: "", trim: true }, preferredTenantTypes: [{ type: String, trim: true }], superArea: { type: String, default: "", trim: true }, carpetArea: { type: String, default: "", trim: true }, bedrooms: { type: Number, min: 0, default: 0 }, bathrooms: { type: Number, min: 0, default: 0 }, floor: { type: String, default: "", trim: true }, totalFloors: { type: Number, min: 1 }, facing: { type: String, default: "", trim: true }, parking: { type: String, default: "", trim: true }, furnishing: { type: String, enum: ["Unfurnished", "Semi-Furnished", "Fully Furnished"] }, petFriendly: { type: Boolean }, nonVegAllowed: { type: Boolean }, contactType: { type: String, enum: ["Owner", "Broker"] } }, { _id: false });
+const rentDetailsSchema = new mongoose.Schema({ rentalPropertyType: { type: String, enum: ["Apartment", "Villa", "Independent House"] }, configuration: { type: String, trim: true }, monthlyRent: { type: Number, min: 1 }, securityDeposit: { type: Number, min: 0 }, availableFrom: { type: String }, lockInPeriod: { type: String, default: "", trim: true }, preferredTenantTypes: [{ type: String, trim: true }], superArea: { type: String, default: "", trim: true }, carpetArea: { type: String, default: "", trim: true }, bedrooms: { type: Number, min: 0, default: 0 }, bathrooms: { type: Number, min: 0, default: 0 }, floor: { type: String, default: "", trim: true }, totalFloors: { type: Number, min: 1 }, facing: { type: String, default: "", trim: true }, parking: { type: String, default: "", trim: true }, furnishing: { type: String, enum: ["Unfurnished", "Semi-Furnished", "Fully Furnished"] }, petFriendly: { type: Boolean }, nonVegAllowed: { type: Boolean }, contactType: { type: String, enum: ["Owner", "Broker"] } }, { _id: false });
 
 const possessionDetailsSchema = new mongoose.Schema(
   {
@@ -231,6 +231,27 @@ const reviewMessageSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const reraDocumentSchema = new mongoose.Schema({
+  key: { type: String, required: true, trim: true },
+  label: { type: String, required: true, trim: true },
+  annexure: { type: String, default: "", trim: true },
+  fileName: { type: String, required: true, trim: true },
+  fileUrl: { type: String, required: true, trim: true },
+  mimeType: { type: String, enum: ["application/pdf", "image/jpeg", "image/png"], required: true },
+  fileSize: { type: Number, min: 1, max: 15 * 1024 * 1024 },
+  uploadedAt: { type: Date, default: Date.now },
+});
+
+const reraPhaseSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, maxlength: 100 },
+  reraNumber: { type: String, required: true, trim: true, maxlength: 100 },
+  reraSiteUrl: { type: String, default: "", trim: true, maxlength: 2000 },
+  panNumber: { type: String, default: "", trim: true, maxlength: 20 },
+  order: { type: Number, min: 0, default: 0 },
+  reraDocuments: { type: [reraDocumentSchema], default: [] },
+  projectDocuments: { type: [reraDocumentSchema], default: [] },
+});
+
 const propertySchema = new mongoose.Schema(
   {
     title: { type: String, trim: true },
@@ -250,7 +271,7 @@ const propertySchema = new mongoose.Schema(
       carpetArea: { type: String, default: "" }, superArea: { type: String, default: "" },
       leaseRent: { type: Number, min: 1 }, rentPerSqft: { type: Number, min: 0 },
       leaseTenure: { type: String, default: "" }, lockInPeriod: { type: String, default: "" }, rentEscalation: { type: String, default: "" },
-      securityDeposit: { type: Number, min: 0 }, availableFrom: { type: String, default: "" }, camCharges: { type: String, default: "" },
+      securityDeposit: { type: Number, min: 0 }, availableFrom: { type: String, default: "" },
       furnishing: { type: String, default: "" }, preferredTenantType: { type: String, default: "" }, subLeasingAllowed: { type: Boolean }, registrationStampDutyResponsibility: { type: String, default: "" }, contactType: { type: String, default: "" },
     },
     area: { type: String, default: "" },
@@ -302,13 +323,6 @@ const propertySchema = new mongoose.Schema(
     ownershipType: { type: String, default: "", trim: true },
     overlooking: [{ type: String, trim: true }],
     bookingAmount: { type: String, default: "", trim: true },
-    maintenanceCharges: { type: String, default: "", trim: true },
-    maintenancePeriod: {
-      type: String,
-      enum: ["", "month", "quarter", "year"],
-      default: "month",
-    },
-
     society: {
       security: { type: String, default: "" },
       waterSupply: { type: String, default: "" },
@@ -344,6 +358,7 @@ const propertySchema = new mongoose.Schema(
 
     reraRegistered: { type: Boolean, default: false },
     reraNumber: { type: String, default: "", trim: true },
+    reraPhases: { type: [reraPhaseSchema], default: [] },
     verified: { type: Boolean, default: false },
     published: { type: Boolean, default: true },
     status: {
@@ -369,7 +384,6 @@ const propertySchema = new mongoose.Schema(
 
     // Relational links set by an admin (null = unlinked; falls back to free-text `builder` / dealer heuristics)
     builderId: { type: mongoose.Schema.Types.ObjectId, ref: "Builder", default: null },
-    dealerId: { type: mongoose.Schema.Types.ObjectId, ref: "Dealer", default: null },
   },
   {
     timestamps: true,
@@ -424,7 +438,6 @@ propertySchema.index({
 propertySchema.index({ status: 1, createdAt: -1 });
 // Relational link lookups + unset cascade (see propertyLinkSync)
 propertySchema.index({ builderId: 1 });
-propertySchema.index({ dealerId: 1 });
 // Numeric price range filter in /api/search
 propertySchema.index({ priceValue: 1 });
 // Case-insensitive exact-match filters (queries must request the same collation).
