@@ -158,6 +158,14 @@ function normalizeFacilities(facilities) {
   }));
 }
 
+function validateLocalityAndNearby(payload) {
+  if (payload.locality?.pinCode && !/^\d{6}$/.test(payload.locality.pinCode)) {
+    throw new PropertyPayloadError("PIN code must contain exactly 6 digits");
+  }
+  payload.facilities = normalizeFacilities(payload.facilities);
+  payload.nearbyDetails = validateNearbyDetails(payload.nearbyDetails);
+}
+
 function validateSharedStructuredFields(payload, propertyLabel) {
   if (payload.reraRegistered) {
     const reraNumber = String(payload.reraNumber || "").trim();
@@ -171,11 +179,7 @@ function validateSharedStructuredFields(payload, propertyLabel) {
   } else {
     payload.reraNumber = "";
   }
-  if (payload.locality?.pinCode && !/^\d{6}$/.test(payload.locality.pinCode)) {
-    throw new PropertyPayloadError("PIN code must contain exactly 6 digits");
-  }
-  payload.facilities = normalizeFacilities(payload.facilities);
-  payload.nearbyDetails = validateNearbyDetails(payload.nearbyDetails);
+  validateLocalityAndNearby(payload);
 }
 
 function deriveRange(rows, field) {
@@ -192,7 +196,7 @@ function deriveRange(rows, field) {
 function validateNearbyDetails(nearbyDetails) {
   if (!nearbyDetails || typeof nearbyDetails !== "object") return nearbyDetails;
   const result = {};
-  for (const key of ["schools", "hospitals", "shopping", "metro"]) {
+  for (const key of ["schools", "colleges", "hospitals", "shopping", "metro"]) {
     const item = nearbyDetails[key];
     if (!item) continue;
     const places = Array.isArray(item.places)
@@ -708,6 +712,7 @@ function normalizeRentPayload(input, { requireStructured = false } = {}) {
   if (!["Owner", "Broker"].includes(details.contactType)) {
     throw new PropertyPayloadError("Select Owner or Broker");
   }
+  validateLocalityAndNearby(payload);
 
   payload.rentDetails = {
     ...details,
@@ -764,6 +769,7 @@ function normalizeLeasePayload(input, { requireStructured = false } = {}) {
   if (!["Owner", "Broker"].includes(details.contactType)) {
     throw new PropertyPayloadError("Select Owner or Broker");
   }
+  validateLocalityAndNearby(payload);
 
   payload.leaseDetails = { ...details, leaseRent, securityDeposit };
   payload.listingType = "For Rent";

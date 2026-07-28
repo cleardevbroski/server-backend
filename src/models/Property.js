@@ -328,6 +328,7 @@ const propertySchema = new mongoose.Schema(
 
     nearbyAmenities: {
       schools: { type: String, default: "" },
+      colleges: { type: String, default: "" },
       hospitals: { type: String, default: "" },
       shopping: { type: String, default: "" },
       metro: { type: String, default: "" },
@@ -335,6 +336,7 @@ const propertySchema = new mongoose.Schema(
 
     nearbyDetails: {
       schools: { type: nearbyDetailSchema, default: undefined },
+      colleges: { type: nearbyDetailSchema, default: undefined },
       hospitals: { type: nearbyDetailSchema, default: undefined },
       shopping: { type: nearbyDetailSchema, default: undefined },
       metro: { type: nearbyDetailSchema, default: undefined },
