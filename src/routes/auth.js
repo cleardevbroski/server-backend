@@ -185,12 +185,11 @@ router.post(
       if (result.success) {
         await recordLoginAudit(req, { phone, method: "otp_requested", status: "success" });
         return res.json({
-          message: result.mode === "fallback" ? `OTP sent successfully (Fallback Mock OTP: ${result.otp})` : "OTP sent successfully",
-          mode: result.mode, // "dev", "sms", or "fallback"
-          ...(result.otp ? { otp: result.otp } : {})
+          message: "OTP sent successfully",
+          mode: result.mode, // "dev" or "sms"
         });
       } else {
-        return res.status(500).json({ error: result.error || "Failed to send OTP" });
+        return res.status(result.statusCode || 500).json({ error: result.error || "Failed to send OTP" });
       }
     } catch (error) {
       console.error("Send OTP error:", error);
