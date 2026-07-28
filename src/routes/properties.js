@@ -83,6 +83,45 @@ function prepareOptionalPropertyPayload(body) {
   return compactPropertyPayload(withoutWorkflowFields(body)) || {};
 }
 
+function hasStructuredDetails(body) {
+  switch (body.propertyType) {
+    case "Apartment": return Array.isArray(body.configurationDetails);
+    case "Villa": return Array.isArray(body.villaDetails?.configurationDetails);
+    case "Plot": return Array.isArray(body.plotDetails?.plotSizeDetails);
+    case "Commercial": return Boolean(body.commercialDetails?.commercialSubtype);
+    case "PG/Co-living": return Array.isArray(body.pgDetails?.sharingDetails);
+    case "Rent": return Boolean(body.rentDetails?.configuration);
+    case "Lease": return Boolean(body.leaseDetails?.leasePropertyType);
+    default: return false;
+  }
+}
+
+/** Sparse submissions remain allowed, but once a structured workflow is
+ * present it is normalized and validated as a complete unit. */
+function prepareSubmittedPropertyPayload(body, existing) {
+  const compact = prepareOptionalPropertyPayload(body);
+  const candidate = existing
+    ? { ...withoutWorkflowFields(existing.toObject()), ...compact, propertyType: compact.propertyType || existing.propertyType }
+    : compact;
+  if (existing) {
+    delete candidate.heroVideo;
+    delete candidate.videos;
+    delete candidate.virtualTourUrl;
+  }
+  const structuredTypes = new Set(["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living", "Rent", "Lease"]);
+  const incoming = { ...compact, propertyType: compact.propertyType || existing?.propertyType };
+  if (hasStructuredDetails(existing ? incoming : candidate)) {
+    return withoutWorkflowFields(normalizeStructuredPayload(candidate, { requireStructured: true }));
+  }
+  if (compact.propertyType && !structuredTypes.has(compact.propertyType)) {
+    for (const key of ["configurationDetails", "villaDetails", "plotDetails", "commercialDetails", "pgDetails", "rentDetails", "leaseDetails", "possessionDetails"]) {
+      candidate[key] = undefined;
+    }
+    return withoutWorkflowFields(candidate);
+  }
+  return existing ? compact : withoutWorkflowFields(candidate);
+}
+
 // ─── GET /api/properties ────────────────────────────────────────
 // List properties (public, with optional filters & pagination)
 router.get("/", async (req, res) => {
@@ -366,7 +405,7 @@ router.put("/my/:id/resubmit", auth, customerOnly, async (req, res) => {
     if (!["draft", "changes_requested"].includes(property.status)) {
       return res.status(409).json({ error: "This property cannot be resubmitted in its current status" });
     }
-    const normalized = prepareOptionalPropertyPayload(req.body);
+    const normalized = prepareSubmittedPropertyPayload(req.body, property);
     property.set(await convertPropertyMedia(normalized));
     property.status = property.status === "draft" ? "submitted" : "resubmitted";
     property.published = false;
@@ -422,7 +461,7 @@ router.post(
   adminOnly,
   async (req, res) => {
     try {
-      const normalizedBody = prepareOptionalPropertyPayload(req.body);
+      const normalizedBody = prepareSubmittedPropertyPayload(req.body);
       const propertyData = {
         ...(await convertPropertyMedia(normalizedBody)),
         postedBy: req.user._id,
@@ -464,7 +503,7 @@ router.put(
         dealerId: existing.dealerId,
       };
 
-      const updates = await convertPropertyMedia(prepareOptionalPropertyPayload(req.body));
+      const updates = await convertPropertyMedia(prepareSubmittedPropertyPayload(req.body, existing));
       existing.set(updates);
       const property = await existing.save();
 
@@ -519,7 +558,7 @@ router.post(
   customerOnly,
   async (req, res) => {
     try {
-      const normalizedBody = prepareOptionalPropertyPayload(req.body);
+      const normalizedBody = prepareSubmittedPropertyPayload(req.body);
       const propertyData = {
         ...(await convertPropertyMedia(normalizedBody)),
         published: false,

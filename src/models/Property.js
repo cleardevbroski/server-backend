@@ -69,6 +69,20 @@ const villaConfigurationDetailSchema = new mongoose.Schema(
     superArea: { type: String, trim: true },
     bedrooms: { type: Number, min: 1 },
     bathrooms: { type: Number, min: 1 },
+    plotDimensions: { type: String, default: "", trim: true },
+    numberOfFloors: { type: String, default: "", trim: true },
+    plotFacing: {
+      type: String,
+      enum: ["East", "West", "North", "South", "North-East", "North-West", "South-East", "South-West"],
+    },
+    cornerPlot: { type: Boolean },
+    roadWidthFacing: { type: String, default: "", trim: true },
+    privateGarden: { type: Boolean },
+    privateGardenArea: { type: String, default: "", trim: true },
+    privatePool: { type: Boolean },
+    terrace: { type: Boolean },
+    terraceDetails: { type: String, default: "", trim: true },
+    gatedCommunity: { type: Boolean },
   },
   { _id: false }
 );
@@ -194,6 +208,15 @@ const nearbyDetailSchema = new mongoose.Schema(
   {
     count: { type: Number, min: 0 },
     distance: { type: String, default: "", trim: true },
+    places: {
+      type: [{
+        name: { type: String, required: true, trim: true },
+        address: { type: String, default: "", trim: true },
+        distance: { type: String, default: "", trim: true },
+        landmark: { type: String, default: "", trim: true },
+      }],
+      default: undefined,
+    },
   },
   { _id: false }
 );
@@ -298,6 +321,7 @@ const propertySchema = new mongoose.Schema(
     locality: {
       city: { type: String, default: "" },
       zone: { type: String, default: "" },
+      address: { type: String, default: "", trim: true },
       landmark: { type: String, default: "" },
       pinCode: { type: String, default: "", trim: true },
     },

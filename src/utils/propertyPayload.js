@@ -195,11 +195,24 @@ function validateNearbyDetails(nearbyDetails) {
   for (const key of ["schools", "hospitals", "shopping", "metro"]) {
     const item = nearbyDetails[key];
     if (!item) continue;
-    if ((item.count === undefined || item.count === null || item.count === "") && !String(item.distance || "").trim()) continue;
-    result[key] = {
-      count: requireInteger(item.count, `${key} count`, 0),
-      distance: requireText(item.distance, `${key} distance`),
-    };
+    const places = Array.isArray(item.places)
+      ? item.places
+          .filter((place) => place && Object.values(place).some((value) => String(value || "").trim()))
+          .map((place, index) => ({
+            name: requireText(place.name, `${key} place ${index + 1} name`),
+            address: String(place.address || "").trim(),
+            distance: String(place.distance || "").trim(),
+            landmark: String(place.landmark || "").trim(),
+          }))
+      : [];
+    const hasLegacy = (item.count !== undefined && item.count !== null && item.count !== "") || String(item.distance || "").trim();
+    if (!places.length && !hasLegacy) continue;
+    result[key] = places.length
+      ? { places }
+      : {
+          count: requireInteger(item.count, `${key} count`, 0),
+          distance: requireText(item.distance, `${key} distance`),
+        };
   }
   return result;
 }
@@ -222,7 +235,8 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
       id: String(row.id || `${configuration}-${index + 1}`).trim(),
       configuration,
       price: requireText(row.price, `${configuration} price`),
-      superBuiltUpArea: requireText(row.superBuiltUpArea, `${configuration} super built-up area`),
+      // Kept only for backwards compatibility with already-published records.
+      superBuiltUpArea: String(row.superBuiltUpArea || "").trim(),
       carpetArea: requireText(row.carpetArea, `${configuration} carpet area`),
       builtUpArea: String(row.builtUpArea || "").trim(),
       bedrooms: requireInteger(row.bedrooms, `${configuration} bedrooms`, 1),
@@ -282,7 +296,7 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   payload.possession = possession.status;
   payload.ageOfProperty = possession.status === "Under Construction" ? "Under Construction" : "";
   payload.price = deriveRange(rows, "price") || payload.price;
-  payload.area = deriveRange(rows, "superBuiltUpArea") || payload.area;
+  payload.area = deriveRange(rows, "builtUpArea") || deriveRange(rows, "superBuiltUpArea") || deriveRange(rows, "carpetArea") || payload.area;
   payload.bedrooms = Math.min(...rows.map((row) => row.bedrooms));
   payload.bathrooms = Math.min(...rows.map((row) => row.bathrooms));
   payload.facing = rows[0].facings.join(", ");
@@ -293,7 +307,7 @@ function normalizePlotDimensions(value) {
   if (!String(value || "").trim()) return "";
   const match = String(value)
     .trim()
-    .match(/^(\d+(?:\.\d+)?)\s*(?:ft|feet|')?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:ft|feet|')?$/i);
+    .match(/^(\d+(?:\.\d+)?)\s*(?:ft|feet|')?\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(?:ft|feet|')?$/i);
   if (!match || Number(match[1]) <= 0 || Number(match[2]) <= 0) {
     throw new PropertyPayloadError("Plot dimensions must use positive width × length values in feet, for example 40 ft × 60 ft");
   }
@@ -330,6 +344,15 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     if (bedrooms !== expectedBedrooms) {
       throw new PropertyPayloadError(`${configuration} bedrooms must equal ${expectedBedrooms}`);
     }
+    const rowFacing = String(row.plotFacing || "").trim();
+    if (rowFacing && !FACING_OPTIONS.has(rowFacing)) {
+      throw new PropertyPayloadError(`${configuration} plot facing is invalid`);
+    }
+    const rowRoadWidth = String(row.roadWidthFacing || "").trim();
+    if (rowRoadWidth && (!Number.isFinite(parseNumericDisplay(rowRoadWidth, "area")) || parseNumericDisplay(rowRoadWidth, "area") <= 0)) {
+      throw new PropertyPayloadError(`${configuration} road width facing must contain a positive number`);
+    }
+    const privateGarden = Boolean(row.privateGarden);
     return {
       configuration,
       price: requirePositiveDisplay(row.price, `${configuration} price`, "price"),
@@ -338,6 +361,19 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
       superArea: requirePositiveDisplay(row.superArea, `${configuration} super area`),
       bedrooms,
       bathrooms: requireInteger(row.bathrooms, `${configuration} bathrooms`, 1),
+      plotDimensions: normalizePlotDimensions(row.plotDimensions),
+      numberOfFloors: normalizeFloorCount(row.numberOfFloors),
+      plotFacing: rowFacing || undefined,
+      cornerPlot: Boolean(row.cornerPlot),
+      roadWidthFacing: rowRoadWidth,
+      privateGarden,
+      privateGardenArea: privateGarden && row.privateGardenArea
+        ? requirePositiveDisplay(row.privateGardenArea, `${configuration} private garden area`)
+        : "",
+      privatePool: Boolean(row.privatePool),
+      terrace: Boolean(row.terrace),
+      terraceDetails: row.terrace ? String(row.terraceDetails || "").trim() : "",
+      gatedCommunity: Boolean(row.gatedCommunity),
     };
   });
 
@@ -345,7 +381,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   if (tags.length !== rows.length || tags.some((tag, index) => tag !== rows[index].configuration)) {
     throw new PropertyPayloadError("Configuration tags and Villa detail rows must match in the same order");
   }
-  if (!FACING_OPTIONS.has(details.plotFacing)) throw new PropertyPayloadError("A valid Villa plot facing is required");
+  if (details.plotFacing && !FACING_OPTIONS.has(details.plotFacing)) throw new PropertyPayloadError("A valid Villa plot facing is required");
 
   const possession = payload.possessionDetails;
   if (!possession || !VILLA_POSSESSION_STATUSES.has(possession.status)) {
@@ -353,15 +389,15 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   }
   const underConstruction = possession.status === "Under Construction";
   if (underConstruction) {
-    if (!isCalendarDate(possession.expectedCompletionDate) || possession.launchDate) {
-      throw new PropertyPayloadError("Under Construction requires only an expected completion date");
+    if (!isCompletionMonth(possession.expectedCompletionDate) || possession.launchDate) {
+      throw new PropertyPayloadError("Under Construction requires only an expected completion month and year");
     }
   } else if (!isCalendarDate(possession.launchDate) || possession.expectedCompletionDate) {
     throw new PropertyPayloadError("Ready to Move requires only a Ready Since date");
   }
 
-  const privateGarden = requireBoolean(details.privateGarden, "Private garden");
-  const terrace = requireBoolean(details.terrace, "Terrace");
+  const privateGarden = Boolean(details.privateGarden);
+  const terrace = Boolean(details.terrace);
   const roadWidthFacing = String(details.roadWidthFacing || "").trim();
   if (roadWidthFacing && (!Number.isFinite(parseNumericDisplay(roadWidthFacing, "area")) || parseNumericDisplay(roadWidthFacing, "area") <= 0)) {
     throw new PropertyPayloadError("Road width facing must contain a positive number");
@@ -384,16 +420,16 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     plotDimensions: normalizePlotDimensions(details.plotDimensions),
     numberOfFloors: normalizeFloorCount(details.numberOfFloors),
     plotFacing: details.plotFacing,
-    cornerPlot: requireBoolean(details.cornerPlot, "Corner plot"),
+    cornerPlot: Boolean(details.cornerPlot),
     roadWidthFacing,
     privateGarden,
     privateGardenArea: privateGarden
       ? requirePositiveDisplay(details.privateGardenArea, "Private garden area")
       : "",
-    privatePool: requireBoolean(details.privatePool, "Private pool"),
+    privatePool: Boolean(details.privatePool),
     terrace,
     terraceDetails: terrace ? String(details.terraceDetails || "").trim() : "",
-    gatedCommunity: requireBoolean(details.gatedCommunity, "Gated community"),
+    gatedCommunity: Boolean(details.gatedCommunity),
   };
   payload.configurationDetails = undefined;
   payload.commercialDetails = undefined;
@@ -407,10 +443,10 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   payload.maintenancePeriod = undefined;
   payload.configs = rows.map((row) => row.configuration);
   payload.price = deriveRange(rows, "price") || payload.price;
-  payload.area = deriveRange(rows, "superArea") || payload.area;
+  payload.area = deriveRange(rows, "superArea") || deriveRange(rows, "builtUpArea") || payload.area;
   payload.bedrooms = Math.min(...rows.map((row) => row.bedrooms));
   payload.bathrooms = Math.min(...rows.map((row) => row.bathrooms));
-  payload.facing = details.plotFacing;
+  payload.facing = rows.find((row) => row.plotFacing)?.plotFacing || details.plotFacing || "";
   payload.possessionDetails = {
     status: possession.status,
     launchDate: underConstruction ? "" : possession.launchDate,
@@ -424,7 +460,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
 function normalizePlotSize(value) {
   const match = String(value || "")
     .trim()
-    .match(/^(\d+(?:\.\d+)?)\s*(?:ft|feet|')?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:ft|feet|')?$/i);
+    .match(/^(\d+(?:\.\d+)?)\s*(?:ft|feet|')?\s*[x×*]\s*(\d+(?:\.\d+)?)\s*(?:ft|feet|')?$/i);
   if (!match || Number(match[1]) <= 0 || Number(match[2]) <= 0) {
     throw new PropertyPayloadError("Plot sizes must use positive width × length values in feet, for example 30 × 40");
   }
@@ -509,8 +545,8 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
   if (!PLOT_LAYOUT_STATUSES.has(layoutPossession.status)) throw new PropertyPayloadError("A valid layout possession status is required");
   const underDevelopment = layoutPossession.status === "Under Development";
   if (underDevelopment) {
-    if (!isCalendarDate(layoutPossession.expectedCompletionDate) || layoutPossession.readyDate) {
-      throw new PropertyPayloadError("Under Development requires only an expected completion date");
+    if (!isCompletionMonth(layoutPossession.expectedCompletionDate) || layoutPossession.readyDate) {
+      throw new PropertyPayloadError("Under Development requires only an expected completion month and year");
     }
   } else if (!isCalendarDate(layoutPossession.readyDate) || layoutPossession.expectedCompletionDate) {
     throw new PropertyPayloadError("Layout Ready requires only a ready date");
@@ -592,8 +628,8 @@ function normalizeCommercialPayload(input, { requireStructured = false } = {}) {
   const possession = payload.possessionDetails;
   if (!possession || !VILLA_POSSESSION_STATUSES.has(possession.status)) throw new PropertyPayloadError("Commercial possession status must be Ready to Move or Under Construction");
   const underConstruction = possession.status === "Under Construction";
-  if (underConstruction ? (!isCalendarDate(possession.expectedCompletionDate) || possession.launchDate) : (!isCalendarDate(possession.launchDate) || possession.expectedCompletionDate)) {
-    throw new PropertyPayloadError(underConstruction ? "Under Construction requires only an expected completion date" : "Ready to Move requires only a ready date");
+  if (underConstruction ? (!isCompletionMonth(possession.expectedCompletionDate) || possession.launchDate) : (!isCalendarDate(possession.launchDate) || possession.expectedCompletionDate)) {
+    throw new PropertyPayloadError(underConstruction ? "Under Construction requires only an expected completion month and year" : "Ready to Move requires only a ready date");
   }
   payload.builder = requireText(payload.builder, "Commercial builder/developer");
   if (!['New Property', 'Resale'].includes(payload.transactionType)) throw new PropertyPayloadError("Commercial transaction type must be New Property or Resale");
@@ -625,7 +661,7 @@ function normalizePgPayload(input, { requireStructured = false } = {}) {
   if (!details || typeof details !== "object") throw new PropertyPayloadError("PG / Co-living details are required");
   if (!["Men only", "Women only", "Co-ed"].includes(details.genderPreference)) throw new PropertyPayloadError("Select a valid gender preference");
   if (!Array.isArray(details.sharingDetails) || !details.sharingDetails.length) throw new PropertyPayloadError("Add at least one sharing type");
-  const seen = new Set(); const rows = details.sharingDetails.map((row) => { if (!PG_SHARING_TYPES.has(row.sharingType) || seen.has(row.sharingType)) throw new PropertyPayloadError("Sharing types must be valid and unique"); seen.add(row.sharingType); return { sharingType: row.sharingType, rentPerBed: requireInteger(row.rentPerBed, `${row.sharingType} rent per bed`, 1), deposit: requireInteger(row.deposit, `${row.sharingType} deposit`, 0), bedsAvailable: requireInteger(row.bedsAvailable, `${row.sharingType} beds available`, 0) }; });
+  const seen = new Set(); const rows = details.sharingDetails.map((row) => { if (!PG_SHARING_TYPES.has(row.sharingType) || seen.has(row.sharingType)) throw new PropertyPayloadError("Sharing types must be valid and unique"); seen.add(row.sharingType); return { sharingType: row.sharingType, rentPerBed: requireInteger(row.rentPerBed, `${row.sharingType} rent per bedroom space`, 1), deposit: requireInteger(row.deposit, `${row.sharingType} deposit`, 0), bedsAvailable: requireInteger(row.bedsAvailable, `${row.sharingType} bedroom spaces available`, 0) }; });
   if (!["Breakfast + Dinner", "All 3 meals", "No meals"].includes(details.mealsIncluded)) throw new PropertyPayloadError("Select a valid meals option");
   const hasMeals = details.mealsIncluded !== "No meals";
   if (hasMeals && !["Veg only", "Veg + Non-veg"].includes(details.foodType)) throw new PropertyPayloadError("Food type is required when meals are included");
