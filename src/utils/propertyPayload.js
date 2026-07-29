@@ -29,6 +29,7 @@ const RERA_DOCUMENTS = new Map([
   ["articles-of-association", ["Articles of Association", "Annexure 16"]],
   ["pan-card", ["PAN Card", "Annexure 2"]],
 ]);
+const KARNATAKA_RERA_URL = "https://rera.karnataka.gov.in/viewAllProjects";
 const PROJECT_DOCUMENTS = new Map([
   ["commencement-certificate", ["Commencement Certificate", "Annexure 80"]],
   ["approved-building-plan", ["Approved Building Plan", "Annexure 81"]],
@@ -254,16 +255,11 @@ function normalizeReraPhases(phases, legacyNumber, propertyLabel) {
     }
     seenNames.add(nameKey);
     seenNumbers.add(numberKey);
-    const reraSiteUrl = String(phase.reraSiteUrl || "").trim();
-    if (reraSiteUrl && !isHttpUrl(reraSiteUrl)) throw new PropertyPayloadError(`${name} RERA website must be a valid HTTP(S) URL`);
-    const panNumber = String(phase.panNumber || "").trim().toUpperCase();
-    if (panNumber && !/^[A-Z]{5}\d{4}[A-Z]$/.test(panNumber)) throw new PropertyPayloadError(`${name} PAN must use the format AAAAA9999A`);
     return {
       ...(phase._id ? { _id: phase._id } : {}),
       name,
       reraNumber,
-      reraSiteUrl,
-      panNumber,
+      reraSiteUrl: KARNATAKA_RERA_URL,
       order: index,
       reraDocuments: normalizeReraDocuments(phase.reraDocuments, RERA_DOCUMENTS, "RERA"),
       projectDocuments: normalizeReraDocuments(phase.projectDocuments, PROJECT_DOCUMENTS, "Project"),
@@ -363,10 +359,26 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   }
 
   validateSharedStructuredFields(payload, "Apartment");
-  if (payload.transactionType === "New Property" && !String(payload.bookingAmount || "").trim()) {
-    throw new PropertyPayloadError("Booking amount is required for a new Apartment");
+  const projectArea = payload.projectArea;
+  if (projectArea && Object.values(projectArea).some((value) => value !== undefined && value !== null && value !== "")) {
+    const totalAcres = optionalPositiveNumber(projectArea.totalAcres, "Total project area");
+    const openSpaceAcres = optionalPositiveNumber(projectArea.openSpaceAcres, "Open space area");
+    const builtUpAcres = optionalPositiveNumber(projectArea.builtUpAcres, "Apartment built-up area");
+    if ([totalAcres, openSpaceAcres, builtUpAcres].some((value) => value === undefined)) {
+      throw new PropertyPayloadError("Total, open-space, and apartment built-up areas are all required");
+    }
+    if (Math.abs(totalAcres - openSpaceAcres - builtUpAcres) > 0.001) {
+      throw new PropertyPayloadError("Open space and apartment built-up area must equal the total project area");
+    }
+    payload.projectArea = { totalAcres, openSpaceAcres, builtUpAcres };
+  } else {
+    payload.projectArea = undefined;
   }
-  if (payload.transactionType === "Resale") payload.bookingAmount = "";
+  payload.totalUnits = payload.totalUnits === undefined || payload.totalUnits === null || payload.totalUnits === ""
+    ? undefined
+    : requireInteger(payload.totalUnits, "Total number of units", 1);
+  payload.ownershipType = undefined;
+  payload.bookingAmount = undefined;
   if (String(payload.description || "").trim().length < 50) {
     throw new PropertyPayloadError("Apartment description must contain at least 50 characters");
   }
@@ -531,7 +543,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   payload.totalFloors = undefined;
   payload.ownershipType = undefined;
   payload.overlooking = undefined;
-  payload.bookingAmount = payload.transactionType === "Resale" ? "" : payload.bookingAmount;
+  payload.bookingAmount = undefined;
   payload.configs = rows.map((row) => row.configuration);
   payload.price = deriveRange(rows, "price") || payload.price;
   payload.area = deriveRange(rows, "superArea") || deriveRange(rows, "builtUpArea") || payload.area;
@@ -739,7 +751,8 @@ function normalizeCommercialPayload(input, { requireStructured = false } = {}) {
   };
   payload.configurationDetails = undefined; payload.villaDetails = undefined; payload.plotDetails = undefined; payload.pgDetails = undefined;
   payload.floorLabel = undefined; payload.totalFloors = undefined; payload.bedrooms = undefined; payload.bathrooms = undefined;
-  payload.facing = undefined; payload.furnishing = undefined; payload.parking = undefined; payload.ownershipType = payload.ownershipType || "";
+  payload.facing = undefined; payload.furnishing = undefined; payload.parking = undefined; payload.ownershipType = undefined;
+  payload.bookingAmount = undefined;
   payload.configs = [details.commercialSubtype];
   payload.area = areas.superArea || areas.builtUpArea || areas.carpetArea;
   payload.possessionDetails = { status: possession.status, launchDate: underConstruction ? "" : possession.launchDate, expectedCompletionDate: underConstruction ? possession.expectedCompletionDate : "" };

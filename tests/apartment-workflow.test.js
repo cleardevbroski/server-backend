@@ -164,7 +164,7 @@ describe("Apartment property workflow", () => {
     expect(res.body.error).toMatch(/expected completion month and year/i);
   });
 
-  it("requires conditional RERA and booking fields", async () => {
+  it("requires conditional RERA fields and validates the project-area split", async () => {
     const { token } = await createAdminToken();
     const rera = await request(app)
       .post("/api/properties")
@@ -173,12 +173,12 @@ describe("Apartment property workflow", () => {
     expect(rera.status).toBe(400);
     expect(rera.body.error).toMatch(/RERA number/i);
 
-    const booking = await request(app)
+    const area = await request(app)
       .post("/api/properties")
       .set("Authorization", `Bearer ${token}`)
-      .send(apartment({ bookingAmount: "" }));
-    expect(booking.status).toBe(400);
-    expect(booking.body.error).toMatch(/Booking amount/i);
+      .send(apartment({ projectArea: { totalAcres: 5, openSpaceAcres: 3, builtUpAcres: 3 } }));
+    expect(area.status).toBe(400);
+    expect(area.body.error).toMatch(/must equal the total project area/i);
   });
 
   it("matches a nested bedroom configuration in the public list", async () => {

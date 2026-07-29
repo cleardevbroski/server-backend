@@ -19,13 +19,37 @@ const app = express();
 
 // ─── Security & Parsing ────────────────────────────────────────
 app.use(helmet());
-const allowedOrigins = process.env.FRONTEND_URL
-  ? process.env.FRONTEND_URL.split(",").map((u) => u.trim().replace(/\/+$/, "")).filter(Boolean)
-  : ["http://localhost:5173", "http://localhost:3000"];
+function normalizeOrigin(value) {
+  if (!value) return "";
+
+  const trimmed = value.trim().replace(/^['"]|['"]$/g, "");
+  const withoutLabel = trimmed
+    .replace(/^FRONTEND_URL=/i, "")
+    .replace(/^(https?:\/\/)FRONTEND_URL=/i, "$1");
+
+  return withoutLabel.replace(/\/+$/, "");
+}
+
+function getAllowedOrigins(frontendUrlValue) {
+  const defaults = ["http://localhost:5173", "http://localhost:3000"];
+  const configuredOrigins = frontendUrlValue
+    ? frontendUrlValue.split(",").map(normalizeOrigin).filter(Boolean)
+    : [];
+
+  return [...new Set([...defaults, ...configuredOrigins])];
+}
+
+const allowedOrigins = getAllowedOrigins(process.env.FRONTEND_URL);
 
 app.use(
   cors({
-    origin: allowedOrigins,
+    origin(origin, callback) {
+      if (!origin || allowedOrigins.includes(origin.replace(/\/+$/, ""))) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`Origin ${origin} is not allowed by CORS`));
+    },
     credentials: true,
   })
 );

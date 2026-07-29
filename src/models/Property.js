@@ -204,6 +204,15 @@ const possessionDetailsSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const projectAreaSchema = new mongoose.Schema(
+  {
+    totalAcres: { type: Number, min: 0 },
+    openSpaceAcres: { type: Number, min: 0 },
+    builtUpAcres: { type: Number, min: 0 },
+  },
+  { _id: false }
+);
+
 const nearbyDetailSchema = new mongoose.Schema(
   {
     count: { type: Number, min: 0 },
@@ -245,8 +254,7 @@ const reraDocumentSchema = new mongoose.Schema({
 const reraPhaseSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 100 },
   reraNumber: { type: String, required: true, trim: true, maxlength: 100 },
-  reraSiteUrl: { type: String, default: "", trim: true, maxlength: 2000 },
-  panNumber: { type: String, default: "", trim: true, maxlength: 20 },
+  reraSiteUrl: { type: String, default: "https://rera.karnataka.gov.in/viewAllProjects", trim: true, maxlength: 2000 },
   order: { type: Number, min: 0, default: 0 },
   reraDocuments: { type: [reraDocumentSchema], default: [] },
   projectDocuments: { type: [reraDocumentSchema], default: [] },
@@ -275,6 +283,8 @@ const propertySchema = new mongoose.Schema(
       furnishing: { type: String, default: "" }, preferredTenantType: { type: String, default: "" }, subLeasingAllowed: { type: Boolean }, registrationStampDutyResponsibility: { type: String, default: "" }, contactType: { type: String, default: "" },
     },
     area: { type: String, default: "" },
+    projectArea: { type: projectAreaSchema, default: undefined },
+    totalUnits: { type: Number, min: 1 },
     possession: { type: String, default: "" },
     possessionDetails: { type: possessionDetailsSchema, default: undefined },
     builder: { type: String, default: "" },
@@ -327,9 +337,7 @@ const propertySchema = new mongoose.Schema(
     virtualTourUrl: { type: String, default: "", trim: true },
     amenities: [{ type: String }],
     facilities: { type: [facilityDetailSchema], default: undefined },
-    ownershipType: { type: String, default: "", trim: true },
     overlooking: [{ type: String, trim: true }],
-    bookingAmount: { type: String, default: "", trim: true },
     society: {
       security: { type: String, default: "" },
       waterSupply: { type: String, default: "" },
