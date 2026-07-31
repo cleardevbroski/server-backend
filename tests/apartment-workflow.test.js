@@ -78,6 +78,45 @@ describe("Apartment property workflow", () => {
     expect(res.body.property.facilities[0]).toMatchObject({ name: "Swimming Pool", category: "Wellness", status: "Available" });
   });
 
+  it("persists structured project content and hides protected download URLs publicly", async () => {
+    const { token } = await createAdminToken();
+    const created = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(apartment({
+        projectNarrative: {
+          introduction: ["A verified project introduction."],
+          usps: ["Large central green"],
+          keyDetails: [{ label: "Towers", value: "8" }],
+          locationAdvantage: ["Near the airport corridor"],
+        },
+        masterPlan: {
+          imageUrl: "https://cdn.example.com/master-plan.jpg",
+          title: "Project Master Plan",
+          summary: "The plan places open space at the centre.",
+        },
+        projectDownloads: [{
+          kind: "master-plan",
+          label: "Master Plan",
+          fileName: "master-plan.pdf",
+          fileUrl: "https://res.cloudinary.com/demo/raw/upload/master-plan.pdf",
+          mimeType: "application/pdf",
+          fileSize: 1024,
+        }],
+        faqs: [{ question: "Where is the project?", answer: "Whitefield, Bangalore." }],
+      }));
+
+    expect(created.status).toBe(201);
+    expect(created.body.property.projectNarrative.usps).toEqual(["Large central green"]);
+    expect(created.body.property.projectDownloads[0].fileUrl).toContain("res.cloudinary.com");
+
+    const publicResult = await request(app).get(`/api/properties/${created.body.property.id}`);
+    expect(publicResult.status).toBe(200);
+    expect(publicResult.body.property.projectDownloads[0]).not.toHaveProperty("fileUrl");
+    expect(publicResult.body.property.masterPlan.title).toBe("Project Master Plan");
+    expect(publicResult.body.property.faqs[0].question).toBe("Where is the project?");
+  });
+
   it("persists at most three ordered Project Overview photos", async () => {
     const { token } = await createAdminToken();
     const heroImages = [

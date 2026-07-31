@@ -76,7 +76,7 @@ function propertyStructure(property) {
   if (property.propertyType === "Commercial" && property.commercialDetails) {
     return [property.commercialDetails.commercialSubtype, property.commercialDetails.buildingGrade, property.commercialDetails.structure].filter(Boolean).join(" · ");
   }
-  return [property.floorLabel || property.floor, property.totalFloors && `${property.totalFloors} total floors`].filter(Boolean).join(" · ");
+  return [property.propertyType === "Apartment" ? "" : property.floor, property.totalFloors && `${property.totalFloors} total floors`].filter(Boolean).join(" · ");
 }
 
 function resolvePromotionBanner(banner, property) {

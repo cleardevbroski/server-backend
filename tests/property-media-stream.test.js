@@ -51,6 +51,19 @@ describe("streamed property media upload", () => {
     expect(res.body.error).toMatch(/invalid media kind/i);
   });
 
+  it("accepts an authenticated MP4 walkthrough project document", async () => {
+    const { createAdminToken } = require("./helpers");
+    const { token } = await createAdminToken();
+    const mp4 = Buffer.concat([Buffer.from([0, 0, 0, 20]), Buffer.from("ftypisom"), Buffer.from("walkthrough")]);
+    const res = await request(app)
+      .post("/api/property-media?kind=project-walkthrough")
+      .set("Authorization", `Bearer ${token}`)
+      .set("Content-Type", "video/mp4")
+      .send(mp4);
+    expect(res.status).toBe(201);
+    expect(res.body.url).toContain("/video/upload/streamed");
+  });
+
   it("rejects content whose signature does not match its MIME type", async () => {
     const res = await request(app)
       .post("/api/property-media?kind=brochure")

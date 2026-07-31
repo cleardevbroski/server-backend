@@ -177,12 +177,113 @@ function normalizeFacilities(facilities) {
   }));
 }
 
+function compactTextList(value, maxItems, label, maxLength = 2000) {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.map((item) => String(item || "").trim()).filter(Boolean);
+  if (rows.length > maxItems) throw new PropertyPayloadError(`${label} supports up to ${maxItems} entries`);
+  return rows.length ? [...new Set(rows.map((item) => item.slice(0, maxLength)))] : undefined;
+}
+
+function normalizeProjectContent(payload) {
+  const narrative = payload.projectNarrative;
+  if (narrative && typeof narrative === "object") {
+    const keyDetails = Array.isArray(narrative.keyDetails)
+      ? narrative.keyDetails.map((row) => ({
+          label: String(row?.label || "").trim().slice(0, 120),
+          value: String(row?.value || "").trim().slice(0, 500),
+        })).filter((row) => row.label && row.value).slice(0, 30)
+      : undefined;
+    const featureGroups = Array.isArray(narrative.featureGroups)
+      ? narrative.featureGroups.map((group) => ({
+          title: String(group?.title || "").trim().slice(0, 160),
+          items: compactTextList(group?.items, 30, "Feature group", 500) || [],
+        })).filter((group) => group.title && group.items.length).slice(0, 12)
+      : undefined;
+    const normalized = {
+      introduction: compactTextList(narrative.introduction, 12, "Introduction"),
+      usps: compactTextList(narrative.usps, 20, "USP", 500),
+      keyDetails: keyDetails?.length ? keyDetails : undefined,
+      featureGroups: featureGroups?.length ? featureGroups : undefined,
+      locationAdvantage: compactTextList(narrative.locationAdvantage, 10, "Location advantage"),
+      investmentReasons: compactTextList(narrative.investmentReasons, 10, "Investment reason"),
+    };
+    payload.projectNarrative = Object.values(normalized).some(Boolean) ? normalized : undefined;
+  } else {
+    payload.projectNarrative = undefined;
+  }
+
+  const masterPlan = payload.masterPlan;
+  if (masterPlan && typeof masterPlan === "object") {
+    const imageUrl = optionalAssetUrl(masterPlan.imageUrl, "Master plan image");
+    const sections = Array.isArray(masterPlan.sections)
+      ? masterPlan.sections.map((section) => ({
+          heading: String(section?.heading || "").trim().slice(0, 180),
+          body: String(section?.body || "").trim().slice(0, 3000),
+        })).filter((section) => section.heading && section.body).slice(0, 12)
+      : undefined;
+    const normalized = {
+      imageUrl,
+      title: String(masterPlan.title || "").trim().slice(0, 180),
+      summary: String(masterPlan.summary || "").trim().slice(0, 5000),
+      sections: sections?.length ? sections : undefined,
+    };
+    payload.masterPlan = Object.values(normalized).some(Boolean) ? normalized : undefined;
+  } else {
+    payload.masterPlan = undefined;
+  }
+
+  if (Array.isArray(payload.projectDownloads)) {
+    const seen = new Set();
+    payload.projectDownloads = payload.projectDownloads.map((document) => {
+      const kind = String(document?.kind || "");
+      if (!["brochure", "master-plan", "walkthrough"].includes(kind) || seen.has(kind)) {
+        throw new PropertyPayloadError("Project download types must be valid and unique");
+      }
+      seen.add(kind);
+      const fileUrl = String(document.fileUrl || "").trim();
+      if (!isHttpUrl(fileUrl) || new URL(fileUrl).hostname !== "res.cloudinary.com") {
+        throw new PropertyPayloadError("Project downloads must be uploaded through ClearTitle");
+      }
+      const mimeType = String(document.mimeType || "").toLowerCase();
+      const expectedMime = kind === "walkthrough" ? "video/mp4" : "application/pdf";
+      if (mimeType !== expectedMime) throw new PropertyPayloadError(`${kind} has an invalid file type`);
+      const fileSize = Number(document.fileSize);
+      if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > 15 * 1024 * 1024) {
+        throw new PropertyPayloadError("Project downloads must be no larger than 15 MB");
+      }
+      return {
+        ...(document._id ? { _id: document._id } : {}),
+        kind,
+        label: requireText(document.label, "Project download label").slice(0, 120),
+        fileName: requireText(document.fileName, "Project download filename").slice(0, 255),
+        fileUrl,
+        mimeType,
+        fileSize,
+      };
+    });
+  } else {
+    payload.projectDownloads = [];
+  }
+
+  if (Array.isArray(payload.faqs)) {
+    if (payload.faqs.length > 15) throw new PropertyPayloadError("A property supports up to 15 FAQs");
+    payload.faqs = payload.faqs.map((faq, index) => ({
+      question: requireText(faq?.question, `FAQ ${index + 1} question`).slice(0, 500),
+      answer: requireText(faq?.answer, `FAQ ${index + 1} answer`).slice(0, 3000),
+      order: index,
+    }));
+  } else {
+    payload.faqs = [];
+  }
+}
+
 function validateLocalityAndNearby(payload) {
   if (payload.locality?.pinCode && !/^\d{6}$/.test(payload.locality.pinCode)) {
     throw new PropertyPayloadError("PIN code must contain exactly 6 digits");
   }
   payload.facilities = normalizeFacilities(payload.facilities);
   payload.nearbyDetails = validateNearbyDetails(payload.nearbyDetails);
+  normalizeProjectContent(payload);
 }
 
 function validateSharedStructuredFields(payload, propertyLabel) {
@@ -382,12 +483,9 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   if (String(payload.description || "").trim().length < 50) {
     throw new PropertyPayloadError("Apartment description must contain at least 50 characters");
   }
-  if (payload.floorLabel && !/^(?:[1-9]\d*|Ground|Basement(?:\s+\d+)?)$/i.test(payload.floorLabel.trim())) {
-    throw new PropertyPayloadError("Floor must be a positive whole number, Ground, or Basement");
-  }
-  if (/^[1-9]\d*$/.test(String(payload.floorLabel || "")) && payload.totalFloors && Number(payload.floorLabel) > Number(payload.totalFloors)) {
-    throw new PropertyPayloadError("Flat floor cannot be higher than total floors");
-  }
+  // `floorLabel` was the deprecated Apartment “Flat Floor” input. Ignore it
+  // for new payloads while retaining schema/read compatibility for old records.
+  payload.floorLabel = undefined;
   payload.configurationDetails = rows;
   payload.villaDetails = undefined;
   payload.commercialDetails = undefined;

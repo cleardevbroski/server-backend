@@ -80,6 +80,9 @@ function presentProperty(property, { includeDocumentUrls = false } = {}) {
       projectDocuments: (phase.projectDocuments || []).map(({ fileUrl, ...document }) => document),
     }));
   }
+  if (!includeDocumentUrls && Array.isArray(visibleProperty.projectDownloads)) {
+    visibleProperty.projectDownloads = visibleProperty.projectDownloads.map(({ fileUrl, ...document }) => document);
+  }
   return { ...visibleProperty, id: source._id.toString() };
 }
 
@@ -507,6 +510,50 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOnly, a
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property document not found" });
     console.error("Download property document error:", error);
+    return res.status(500).json({ error: "Unable to download document" });
+  }
+});
+
+router.get("/:id/project-downloads/:documentId/download", auth, customerOnly, async (req, res) => {
+  try {
+    if (!req.user.name || !req.user.email) {
+      return res.status(400).json({ error: "Complete your name and email before downloading documents" });
+    }
+    const property = await Property.findOne({
+      _id: req.params.id,
+      $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
+    });
+    if (!property) return res.status(404).json({ error: "Property not found" });
+    const document = property.projectDownloads.id(req.params.documentId);
+    if (!document) return res.status(404).json({ error: "Project download not found" });
+    const source = new URL(document.fileUrl);
+    if (source.protocol !== "https:" || source.hostname !== "res.cloudinary.com") {
+      return res.status(409).json({ error: "Document storage location is invalid" });
+    }
+    const upstream = await fetch(source, { redirect: "error" });
+    if (!upstream.ok) return res.status(502).json({ error: "Document is temporarily unavailable" });
+    const bytes = Buffer.from(await upstream.arrayBuffer());
+    if (bytes.length > 15 * 1024 * 1024) return res.status(413).json({ error: "Document exceeds the download limit" });
+    await Lead.create({
+      type: "property_interest",
+      name: req.user.name,
+      email: req.user.email,
+      phone: req.user.phone,
+      message: `Verified ${document.kind} download for ${property.title}`,
+      propertyId: property._id.toString(),
+      propertyTitle: property.title,
+      action: "document",
+      documentName: document.label,
+    });
+    const safeName = String(document.fileName || `${document.kind}.pdf`).replace(/[^A-Za-z0-9._ -]/g, "_");
+    res.set("Content-Type", document.mimeType);
+    res.set("Content-Length", String(bytes.length));
+    res.set("Content-Disposition", `attachment; filename="${safeName}"`);
+    res.set("Cache-Control", "private, no-store");
+    return res.send(bytes);
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Project download not found" });
+    console.error("Download project file error:", error);
     return res.status(500).json({ error: "Unable to download document" });
   }
 });

@@ -213,6 +213,46 @@ const projectAreaSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const projectNarrativeSchema = new mongoose.Schema({
+  introduction: [{ type: String, trim: true, maxlength: 3000 }],
+  usps: [{ type: String, trim: true, maxlength: 500 }],
+  keyDetails: [{
+    label: { type: String, trim: true, maxlength: 120 },
+    value: { type: String, trim: true, maxlength: 500 },
+  }],
+  featureGroups: [{
+    title: { type: String, trim: true, maxlength: 160 },
+    items: [{ type: String, trim: true, maxlength: 500 }],
+  }],
+  locationAdvantage: [{ type: String, trim: true, maxlength: 2000 }],
+  investmentReasons: [{ type: String, trim: true, maxlength: 2000 }],
+}, { _id: false });
+
+const masterPlanSchema = new mongoose.Schema({
+  imageUrl: { type: String, default: "", trim: true },
+  title: { type: String, default: "", trim: true, maxlength: 180 },
+  summary: { type: String, default: "", trim: true, maxlength: 5000 },
+  sections: [{
+    heading: { type: String, trim: true, maxlength: 180 },
+    body: { type: String, trim: true, maxlength: 3000 },
+  }],
+}, { _id: false });
+
+const projectDownloadSchema = new mongoose.Schema({
+  kind: { type: String, enum: ["brochure", "master-plan", "walkthrough"], required: true },
+  label: { type: String, required: true, trim: true, maxlength: 120 },
+  fileName: { type: String, required: true, trim: true, maxlength: 255 },
+  fileUrl: { type: String, required: true, trim: true },
+  mimeType: { type: String, enum: ["application/pdf", "video/mp4"], required: true },
+  fileSize: { type: Number, min: 1, max: 15 * 1024 * 1024 },
+});
+
+const projectFaqSchema = new mongoose.Schema({
+  question: { type: String, required: true, trim: true, maxlength: 500 },
+  answer: { type: String, required: true, trim: true, maxlength: 3000 },
+  order: { type: Number, min: 0, default: 0 },
+}, { _id: false });
+
 const nearbyDetailSchema = new mongoose.Schema(
   {
     count: { type: Number, min: 0 },
@@ -285,6 +325,10 @@ const propertySchema = new mongoose.Schema(
     area: { type: String, default: "" },
     projectArea: { type: projectAreaSchema, default: undefined },
     totalUnits: { type: Number, min: 1 },
+    projectNarrative: { type: projectNarrativeSchema, default: undefined },
+    masterPlan: { type: masterPlanSchema, default: undefined },
+    projectDownloads: { type: [projectDownloadSchema], default: [] },
+    faqs: { type: [projectFaqSchema], default: [] },
     possession: { type: String, default: "" },
     possessionDetails: { type: possessionDetailsSchema, default: undefined },
     builder: { type: String, default: "" },

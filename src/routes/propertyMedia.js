@@ -18,6 +18,20 @@ const KINDS = {
     resourceType: "raw",
     folder: "clear-title/properties/brochures",
   },
+  "project-document-pdf": {
+    mime: new Set(["application/pdf"]),
+    maxBytes: 15 * 1024 * 1024,
+    resourceType: "raw",
+    folder: "clear-title/properties/project-downloads",
+    requiresAuth: true,
+  },
+  "project-walkthrough": {
+    mime: new Set(["video/mp4"]),
+    maxBytes: 15 * 1024 * 1024,
+    resourceType: "video",
+    folder: "clear-title/properties/project-downloads",
+    requiresAuth: true,
+  },
   "layout-map-image": {
     mime: new Set(["image/jpeg", "image/png", "image/webp"]),
     maxBytes: 5 * 1024 * 1024,
