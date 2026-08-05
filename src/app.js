@@ -93,6 +93,9 @@ app.use("/api/leads", leadRoutes);
 app.use("/api/channel-partners", require("./routes/channelPartners"));
 app.use("/api/channel-partner-leads", require("./routes/channelPartnerLeads"));
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/client-activity", require("./routes/clientActivity"));
+app.use("/api/favorites", require("./routes/favorites"));
+app.use("/api/system-notifications", require("./routes/systemNotifications"));
 app.use("/api/search", searchRoutes);
 
 // Health check

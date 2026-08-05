@@ -2,6 +2,7 @@ const express = require("express");
 const { body, query, validationResult } = require("express-validator");
 const Property = require("../models/Property");
 const Lead = require("../models/Lead");
+const FavoriteProperty = require("../models/FavoriteProperty");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const customerOnly = require("../middleware/customerOnly");
@@ -596,8 +597,10 @@ router.post(
   async (req, res) => {
     try {
       const normalizedBody = prepareSubmittedPropertyPayload(req.body);
+      const hasTitle = typeof normalizedBody.title === "string" && Boolean(normalizedBody.title.trim());
       const propertyData = {
         ...(await convertPropertyMedia(normalizedBody)),
+        ...(!hasTitle ? { status: "pending", published: false } : {}),
         postedBy: req.user._id,
         postedDate: new Date().toISOString(),
       };
@@ -672,6 +675,7 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
     }
 
     await unlinkProperty(property);
+    await FavoriteProperty.deleteMany({ propertyId: property._id });
 
     return res.json({ message: "Property deleted successfully" });
   } catch (error) {

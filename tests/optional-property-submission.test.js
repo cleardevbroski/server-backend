@@ -12,6 +12,7 @@ describe("optional property fields", () => {
       expect(response.body.property.title).toBeUndefined();
       expect(response.body.property.price).toBeUndefined();
       expect(response.body.property.image).toBeFalsy();
+      expect(response.body.property).toMatchObject({ status: "pending", published: false });
     }
   });
 
