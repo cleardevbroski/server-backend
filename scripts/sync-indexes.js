@@ -22,6 +22,9 @@ const models = {
   HeroBanner: require("../src/models/HeroBanner"),
   Insight: require("../src/models/Insight"),
   Testimonial: require("../src/models/Testimonial"),
+  ChannelPartner: require("../src/models/ChannelPartner"),
+  ChannelPartnerClient: require("../src/models/ChannelPartnerClient"),
+  ChannelPartnerCounter: require("../src/models/ChannelPartnerCounter"),
 };
 
 async function main() {

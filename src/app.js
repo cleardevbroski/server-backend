@@ -60,6 +60,11 @@ app.use(
   rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many media uploads. Please try again later." } }),
   require("./routes/propertyMedia")
 );
+app.use(
+  "/api/channel-partner-media",
+  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many document uploads. Please try again later." } }),
+  require("./routes/channelPartnerMedia")
+);
 // 10mb: allows base64 image payloads (<=5MB each) while staying under MongoDB's
 // 16MB BSON document limit and capping storage/bandwidth abuse on public routes.
 app.use(express.json({ limit: "10mb" }));
@@ -85,6 +90,8 @@ app.use("/api/hero", heroRoutes);
 app.use("/api/advertisements", advertisementRoutes);
 app.use("/api/cms", require("./routes/cms"));
 app.use("/api/leads", leadRoutes);
+app.use("/api/channel-partners", require("./routes/channelPartners"));
+app.use("/api/channel-partner-leads", require("./routes/channelPartnerLeads"));
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/search", searchRoutes);
 

@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "test": "jest --runInBand",
     "db:sync-indexes": "node scripts/sync-indexes.js",
+    "db:backfill-channel-partner-codes": "node scripts/backfill-channel-partner-codes.js",
     "db:migrate-property-rera": "node scripts/migrate-property-rera.js",
     "db:clear": "node clear.js"
   },

@@ -1,0 +1,236 @@
+const request = require("supertest");
+const app = require("../src/app");
+const ChannelPartner = require("../src/models/ChannelPartner");
+const ChannelPartnerClient = require("../src/models/ChannelPartnerClient");
+const Property = require("../src/models/Property");
+const { createAdminToken, createUserToken } = require("./helpers");
+
+const doc = (name = "document.pdf", mimeType = "application/pdf") => ({
+  url: `https://cdn.example.com/${name}`,
+  originalName: name,
+  mimeType,
+  bytes: 2048,
+});
+
+function validApplication(overrides = {}) {
+  return {
+    company: { name: "Northstar Realty", businessType: "partnership", yearEstablished: 2018, panNumber: "ABCDE1234F", gstNumber: "", reraApplicable: false, reraNumber: "" },
+    contact: { name: "Asha Rao", designation: "Partner", mobile: "9876543210", alternateMobile: "", email: "asha@example.com" },
+    address: { line1: "12 Residency Road", line2: "", city: "Bengaluru", state: "Karnataka", pinCode: "560001" },
+    business: { areasOfOperation: ["Whitefield", "North Bengaluru"], currentProjects: "Project One", developerAssociations: "Builder One", teamStrength: "3_5", preferredSegments: ["apartments", "villas"] },
+    bank: { accountHolderName: "Northstar Realty", bankName: "Example Bank", branch: "MG Road", accountNumber: "123456789012", ifscCode: "ABCD0123456" },
+    documents: { panCard: doc("pan.pdf"), cancelledCheque: doc("cheque.png", "image/png"), signatureUpload: doc("signature.png", "image/png") },
+    declaration: { informationAccurate: true, partnerPolicyAccepted: true, leadPolicyAccepted: true, brokeragePolicyAccepted: true, approvalAcknowledged: true },
+    signatory: { name: "Asha Rao", designation: "Partner", signedDate: "2026-08-04" },
+    signature: { mode: "uploaded" },
+    ...overrides,
+  };
+}
+
+describe("Channel partners API", () => {
+  afterEach(() => {
+    delete process.env.RESEND_API_KEY;
+    jest.restoreAllMocks();
+  });
+
+  it("creates an application, encrypts the account number, and returns a reference", async () => {
+    const res = await request(app).post("/api/channel-partners").set("Idempotency-Key", "application-1").send(validApplication());
+    expect(res.status).toBe(201);
+    expect(res.body.application.applicationNumber).toMatch(/^CP-\d{4}-\d{6}$/);
+    expect(res.body.application.partnerCode).toMatch(/^CT-\d{4,}$/);
+    expect(res.body.application.status).toBe("active");
+    expect(res.body.application.partnerType).toBe("company");
+    const stored = await ChannelPartner.findOne().select("+bank.accountNumberEncrypted");
+    expect(stored.bank.accountNumberEncrypted).not.toContain("123456789012");
+    expect(stored.bank.accountNumberLast4).toBe("9012");
+  });
+
+  it("makes repeat requests idempotent", async () => {
+    const first = await request(app).post("/api/channel-partners").set("Idempotency-Key", "repeat-key").send(validApplication());
+    const second = await request(app).post("/api/channel-partners").set("Idempotency-Key", "repeat-key").send(validApplication());
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(200);
+    expect(second.body.application.applicationNumber).toBe(first.body.application.applicationNumber);
+    expect(second.body.application.partnerCode).toBe(first.body.application.partnerCode);
+    expect(await ChannelPartner.countDocuments()).toBe(1);
+  });
+
+  it("requires a RERA certificate when RERA applies", async () => {
+    const input = validApplication();
+    input.company.reraNumber = "PRM/KA/RERA/1234";
+    const res = await request(app).post("/api/channel-partners").send(input);
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain("RERA certificate is required");
+  });
+
+  it("allows an omitted establishment year and requires current projects", async () => {
+    const input = validApplication();
+    input.company.yearEstablished = "";
+    const ok = await request(app).post("/api/channel-partners").send(input);
+    expect(ok.status).toBe(201);
+
+    await ChannelPartner.deleteMany({});
+    const missingProjects = validApplication({ business: { ...input.business, currentProjects: "" } });
+    const invalid = await request(app).post("/api/channel-partners").send(missingProjects);
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.errors).toContain("Projects currently selling is required");
+  });
+
+  it("continues to require team strength for company applications", async () => {
+    const input = validApplication();
+    delete input.business.teamStrength;
+    const res = await request(app).post("/api/channel-partners").send(input);
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toContain("Choose a valid team strength");
+  });
+
+  it("accepts individual partners without team strength and strips company-only values", async () => {
+    const input = validApplication();
+    input.partnerType = "individual";
+    input.company.name = "Asha Rao";
+    delete input.business.teamStrength;
+    input.documents.companyLogo = doc("company-logo.png", "image/png");
+    const res = await request(app).post("/api/channel-partners").send(input);
+    expect(res.status).toBe(201);
+    expect(res.body.application.partnerType).toBe("individual");
+
+    const stored = await ChannelPartner.findOne();
+    expect(stored.partnerType).toBe("individual");
+    expect(stored.business.teamStrength).toBeUndefined();
+    expect(stored.documents.companyLogo).toBeNull();
+  });
+
+  it("uses individual-name validation and rejects unsupported partner types", async () => {
+    const individual = validApplication();
+    individual.partnerType = "individual";
+    individual.company.name = "";
+    delete individual.business.teamStrength;
+    const missingName = await request(app).post("/api/channel-partners").send(individual);
+    expect(missingName.status).toBe(400);
+    expect(missingName.body.errors).toContain("Partner name is required");
+
+    const invalid = validApplication();
+    invalid.partnerType = "agency";
+    const unsupported = await request(app).post("/api/channel-partners").send(invalid);
+    expect(unsupported.status).toBe(400);
+    expect(unsupported.body.errors).toContain("Choose a valid channel partner type");
+  });
+
+  it("rejects invalid identifiers and declarations", async () => {
+    const input = validApplication();
+    input.company.panNumber = "INVALID";
+    input.bank.ifscCode = "BAD";
+    input.declaration.partnerPolicyAccepted = false;
+    const res = await request(app).post("/api/channel-partners").send(input);
+    expect(res.status).toBe(400);
+    expect(res.body.errors).toEqual(expect.arrayContaining(["Enter a valid PAN number", "Enter a valid IFSC code", "All declarations and policies must be accepted"]));
+  });
+
+  it("protects admin listing and returns masked records", async () => {
+    await request(app).post("/api/channel-partners").send(validApplication());
+    expect((await request(app).get("/api/channel-partners")).status).toBe(401);
+    const { token } = await createUserToken();
+    expect((await request(app).get("/api/channel-partners").set("Authorization", `Bearer ${token}`)).status).toBe(403);
+    const admin = await createAdminToken();
+    const res = await request(app).get("/api/channel-partners").set("Authorization", `Bearer ${admin.token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.partners[0].panMasked).toMatch(/234F$/);
+    expect(JSON.stringify(res.body)).not.toContain("123456789012");
+  });
+
+  it("activates immediately and allows an admin to suspend, restore, and read decrypted details", async () => {
+    await request(app).post("/api/channel-partners").send(validApplication());
+    const partner = await ChannelPartner.findOne();
+    const { token } = await createAdminToken();
+    expect(partner.status).toBe("active");
+    const suspend = await request(app).patch(`/api/channel-partners/${partner._id}/status`).set("Authorization", `Bearer ${token}`).send({ status: "suspended", note: "Policy check" });
+    expect(suspend.status).toBe(200);
+    const restore = await request(app).patch(`/api/channel-partners/${partner._id}/status`).set("Authorization", `Bearer ${token}`).send({ status: "active" });
+    expect(restore.status).toBe(200);
+    const detail = await request(app).get(`/api/channel-partners/${partner._id}`).set("Authorization", `Bearer ${token}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.partner.bank.accountNumber).toBe("123456789012");
+    expect(detail.body.partner.partnerCode).toMatch(/^CT-\d{4,}$/);
+    expect(detail.body.partner.reviewHistory).toHaveLength(3);
+  });
+
+  it("requires reasons and rejects invalid status transitions", async () => {
+    await request(app).post("/api/channel-partners").send(validApplication());
+    const partner = await ChannelPartner.findOne();
+    const { token } = await createAdminToken();
+    const invalid = await request(app).patch(`/api/channel-partners/${partner._id}/status`).set("Authorization", `Bearer ${token}`).send({ status: "approved" });
+    expect(invalid.status).toBe(409);
+    const missingReason = await request(app).patch(`/api/channel-partners/${partner._id}/status`).set("Authorization", `Bearer ${token}`).send({ status: "suspended" });
+    expect(missingReason.status).toBe(400);
+  });
+
+  it("registers clients by partner code and blocks duplicates during the active 90 days", async () => {
+    const firstPartner = await request(app).post("/api/channel-partners").send(validApplication());
+    const secondInput = validApplication();
+    secondInput.company.panNumber = "FGHIJ5678K";
+    secondInput.company.name = "Second Realty";
+    secondInput.contact.email = "second@example.com";
+    secondInput.contact.mobile = "9876543211";
+    const secondPartner = await request(app).post("/api/channel-partners").send(secondInput);
+    const project = await Property.create({ title: "ClearTitle Heights", published: true, status: "approved" });
+
+    const firstSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: firstPartner.body.application.partnerCode });
+    const secondSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: secondPartner.body.application.partnerCode });
+    expect(firstSession.status).toBe(200);
+    expect(secondSession.status).toBe(200);
+
+    const payload = { clientName: "Vikas Rao", mobile: "+91 99864 65931", email: "vikas@example.com", projectId: project._id.toString(), consentAccepted: true };
+    process.env.RESEND_API_KEY = "test-resend-key";
+    const emailRequest = jest.spyOn(global, "fetch").mockResolvedValue({ ok: true, json: async () => ({ id: "email-id" }) });
+    const accepted = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${firstSession.body.token}`).set("Idempotency-Key", "lead-one").send(payload);
+    expect(accepted.status).toBe(201);
+    expect(accepted.body.client.leadNumber).toMatch(/^CTL-\d{4}-\d{6}$/);
+
+    const samePartnerDuplicate = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${firstSession.body.token}`).send(payload);
+    expect(samePartnerDuplicate.status).toBe(200);
+    expect(samePartnerDuplicate.body.existing).toBe(true);
+
+    const duplicate = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${secondSession.body.token}`).send(payload);
+    expect(duplicate.status).toBe(409);
+    expect(JSON.stringify(duplicate.body)).not.toContain("Northstar");
+    expect(await ChannelPartnerClient.countDocuments({ status: "registered" })).toBe(1);
+
+    expect(emailRequest).toHaveBeenCalledTimes(4);
+    const sentEmails = emailRequest.mock.calls.map(([, options]) => JSON.parse(options.body));
+    expect(sentEmails.map((email) => email.subject)).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^Client Registration Confirmed - CTL-/),
+      "Alert: Client Already Registered",
+      "Alert: Another Channel Partner Attempted to Register Your Client",
+    ]));
+    expect(sentEmails.filter((email) => email.to[0] === "asha@example.com")).toHaveLength(3);
+    expect(sentEmails.filter((email) => email.to[0] === "second@example.com")).toHaveLength(1);
+    const samePartnerEmail = sentEmails.find((email) => email.subject === "Alert: Client Already Registered" && email.to[0] === "asha@example.com");
+    expect(samePartnerEmail.html).toContain("before the existing 90-day registration expired");
+    const attemptingPartnerEmail = sentEmails.find((email) => email.to[0] === "second@example.com");
+    expect(attemptingPartnerEmail.html).toContain("No new lead or ownership was created");
+    expect(attemptingPartnerEmail.html).not.toContain("Northstar Realty");
+  });
+
+  it("removes expired clients from the old partner and lets another partner register them", async () => {
+    const firstPartner = await request(app).post("/api/channel-partners").send(validApplication());
+    const secondInput = validApplication();
+    secondInput.company.panNumber = "LMNOP9012Q";
+    secondInput.company.name = "Fresh Realty";
+    secondInput.contact.email = "fresh@example.com";
+    secondInput.contact.mobile = "9876543212";
+    const secondPartner = await request(app).post("/api/channel-partners").send(secondInput);
+    const project = await Property.create({ title: "ClearTitle Gardens", published: true, status: "approved" });
+    const firstSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: firstPartner.body.application.partnerCode });
+    const secondSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: secondPartner.body.application.partnerCode });
+    const payload = { clientName: "Meera Shah", mobile: "9986465932", projectId: project._id.toString(), consentAccepted: true };
+    await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${firstSession.body.token}`).send(payload);
+    await ChannelPartnerClient.updateOne({}, { $set: { ownershipExpiresAt: new Date(Date.now() - 1000) } });
+
+    const oldList = await request(app).get("/api/channel-partner-leads/mine").set("Authorization", `Bearer ${firstSession.body.token}`);
+    expect(oldList.body.clients).toHaveLength(0);
+    const reclaimed = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${secondSession.body.token}`).send(payload);
+    expect(reclaimed.status).toBe(201);
+    expect(await ChannelPartnerClient.countDocuments({ status: "expired" })).toBe(1);
+    expect(await ChannelPartnerClient.countDocuments({ status: "registered" })).toBe(1);
+  });
+});
