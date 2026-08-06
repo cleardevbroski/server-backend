@@ -717,7 +717,8 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
   }
   const totalPlots = requireInteger(details.totalPlots, "Number of plots", 1);
   if (!Array.isArray(details.inventory) || details.inventory.length !== totalPlots) {
-    throw new PropertyPayloadError("Plot inventory must contain exactly the declared number of plots");
+    const inventoryCount = Array.isArray(details.inventory) ? details.inventory.length : 0;
+    throw new PropertyPayloadError(`Plot inventory has ${inventoryCount} row${inventoryCount === 1 ? "" : "s"}, but the declared number of plots is ${totalPlots}`);
   }
   const validSizes = new Set(rows.map((row) => row.plotSize));
   const seenPlotNumbers = new Set();
