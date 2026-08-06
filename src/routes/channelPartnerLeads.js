@@ -366,4 +366,29 @@ router.get("/admin/clients", auth, adminOnly, async (req, res) => {
   }
 });
 
+router.post("/admin/clients/:id/resend-email", auth, adminOnly, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: "CP client not found." });
+    const client = await ChannelPartnerClient.findById(req.params.id).populate("partnerId", "company.name contact.email");
+    if (!client) return res.status(404).json({ error: "CP client not found." });
+    if (!client.partnerId?.contact?.email) return res.status(409).json({ error: "The Channel Partner email address is unavailable." });
+    if (client.status !== "registered" || client.ownershipExpiresAt <= new Date()) return res.status(409).json({ error: "Only an active client registration email can be resent." });
+    const result = await sendChannelPartnerClientRegisteredEmail({
+      email: client.partnerId.contact.email,
+      partnerName: client.partnerId.company?.name,
+      leadNumber: client.leadNumber,
+      clientName: client.clientName,
+      mobileLast4: client.mobileLast4,
+      projectTitle: client.projectTitle,
+      registeredAt: client.registeredAt,
+      ownershipExpiresAt: client.ownershipExpiresAt,
+    });
+    if (!result.delivered) return res.status(503).json({ error: "Email delivery is not configured on the server." });
+    return res.json({ message: `Client confirmation email sent to ${client.partnerId.contact.email}` });
+  } catch (error) {
+    console.error("Resend CP client confirmation email error:", error);
+    return res.status(502).json({ error: error.message || "Unable to resend client confirmation email." });
+  }
+});
+
 module.exports = router;

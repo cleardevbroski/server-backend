@@ -259,14 +259,26 @@ describe("Channel partners API", () => {
     expect(JSON.stringify(duplicate.body)).not.toContain("Northstar");
     expect(await ChannelPartnerClient.countDocuments({ status: "registered" })).toBe(1);
 
-    expect(emailRequest).toHaveBeenCalledTimes(4);
+    const client = await ChannelPartnerClient.findOne({ status: "registered" });
+    const admin = await createAdminToken();
+    const adminList = await request(app).get("/api/channel-partner-leads/admin/clients").set("Authorization", `Bearer ${admin.token}`);
+    expect(adminList.status).toBe(200);
+    expect(adminList.body.clients[0].channelPartner.name).toBe("Northstar Realty");
+
+    const resent = await request(app)
+      .post(`/api/channel-partner-leads/admin/clients/${client._id}/resend-email`)
+      .set("Authorization", `Bearer ${admin.token}`);
+    expect(resent.status).toBe(200);
+    expect(resent.body.message).toContain("asha@example.com");
+
+    expect(emailRequest).toHaveBeenCalledTimes(5);
     const sentEmails = emailRequest.mock.calls.map(([, options]) => JSON.parse(options.body));
     expect(sentEmails.map((email) => email.subject)).toEqual(expect.arrayContaining([
       expect.stringMatching(/^Client Registration Confirmed - CTL-/),
       "Alert: Client Already Registered",
       "Alert: Another Channel Partner Attempted to Register Your Client",
     ]));
-    expect(sentEmails.filter((email) => email.to[0] === "asha@example.com")).toHaveLength(3);
+    expect(sentEmails.filter((email) => email.to[0] === "asha@example.com")).toHaveLength(4);
     expect(sentEmails.filter((email) => email.to[0] === "second@example.com")).toHaveLength(1);
     const samePartnerEmail = sentEmails.find((email) => email.subject === "Alert: Client Already Registered" && email.to[0] === "asha@example.com");
     expect(samePartnerEmail.html).toContain("before the existing 90-day registration expired");
