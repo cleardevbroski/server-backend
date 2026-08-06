@@ -8,7 +8,7 @@ const adminOnly = require("../middleware/adminOnly");
 const { buildChannelPartnerPayload } = require("../utils/channelPartnerPayload");
 const { encryptSensitive, decryptSensitive, hashLookup } = require("../utils/channelPartnerCrypto");
 const { canTransition, transitionRequiresReason } = require("../services/channelPartnerWorkflow");
-const { sendChannelPartnerRegisteredEmail } = require("../services/emailService");
+const { sendChannelPartnerRegisteredEmail, sendChannelPartnerStatusEmail } = require("../services/emailService");
 
 const router = express.Router();
 const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 1000 : 5, message: { error: "Too many applications. Please try again later." } });
@@ -163,16 +163,56 @@ router.get("/:id", auth, adminOnly, async (req, res) => {
   try {
     const partner = await ChannelPartner.findById(req.params.id).select("+bank.accountNumberEncrypted +partnerCodeEncrypted").lean();
     if (!partner) return res.status(404).json({ error: "Channel partner application not found" });
-    const accountNumber = decryptSensitive(partner.bank.accountNumberEncrypted);
-    const partnerCode = partner.partnerCodeEncrypted ? decryptSensitive(partner.partnerCodeEncrypted) : "";
+    const decryptionWarnings = [];
+    let accountNumber = "";
+    let partnerCode = "";
+    try {
+      accountNumber = decryptSensitive(partner.bank?.accountNumberEncrypted);
+    } catch (error) {
+      decryptionWarnings.push("bankAccount");
+      console.error(`Channel partner ${partner.applicationNumber} bank details could not be decrypted:`, error.message);
+    }
+    try {
+      partnerCode = partner.partnerCodeEncrypted ? decryptSensitive(partner.partnerCodeEncrypted) : "";
+      if (!partnerCode) decryptionWarnings.push("partnerCode");
+    } catch (error) {
+      decryptionWarnings.push("partnerCode");
+      console.error(`Channel partner ${partner.applicationNumber} code could not be decrypted:`, error.message);
+    }
     delete partner.bank.accountNumberEncrypted;
     delete partner.partnerCodeEncrypted;
     delete partner.idempotencyKey;
-    return res.json({ partner: { ...partner, partnerCode, id: partner._id.toString(), partnerType: partner.partnerType || "company", bank: { ...partner.bank, accountNumber } } });
+    return res.json({ partner: { ...partner, partnerCode, sensitiveDataAvailable: decryptionWarnings.length === 0, decryptionWarnings, id: partner._id.toString(), partnerType: partner.partnerType || "company", bank: { ...partner.bank, accountNumber } } });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Channel partner application not found" });
     console.error("Get channel partner error:", error);
     return res.status(500).json({ error: "Unable to load channel partner application" });
+  }
+});
+
+router.post("/:id/resend-registration-email", auth, adminOnly, async (req, res) => {
+  try {
+    const partner = await ChannelPartner.findById(req.params.id).select("+partnerCodeEncrypted");
+    if (!partner) return res.status(404).json({ error: "Channel partner application not found" });
+    let partnerCode;
+    try {
+      partnerCode = decryptSensitive(partner.partnerCodeEncrypted);
+    } catch (error) {
+      console.error(`Channel partner ${partner.applicationNumber} registration email could not be resent:`, error.message);
+      return res.status(409).json({ error: "The partner code cannot be decrypted. Restore the encryption key used when this application was submitted." });
+    }
+    const result = await sendChannelPartnerRegisteredEmail({
+      email: partner.contact.email,
+      name: partner.company.name,
+      applicationNumber: partner.applicationNumber,
+      partnerCode,
+    });
+    if (!result.delivered) return res.status(503).json({ error: "Email delivery is not configured on the server" });
+    return res.json({ message: `Registration email sent to ${partner.contact.email}` });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Channel partner application not found" });
+    console.error("Resend channel partner registration email error:", error);
+    return res.status(502).json({ error: error.message || "Unable to send registration email" });
   }
 });
 
@@ -191,7 +231,20 @@ router.patch("/:id/status", auth, adminOnly, async (req, res) => {
     if (nextStatus === "rejected") partner.rejectedAt = new Date();
     partner.reviewHistory.push({ fromStatus: oldStatus, toStatus: nextStatus, note, adminId: req.user._id });
     await partner.save();
-    return res.json({ message: "Application status updated", partner: listRecord(partner) });
+    let emailSent = false;
+    try {
+      const result = await sendChannelPartnerStatusEmail({
+        email: partner.contact.email,
+        name: partner.company.name,
+        applicationNumber: partner.applicationNumber,
+        status: nextStatus,
+        note,
+      });
+      emailSent = Boolean(result.delivered);
+    } catch (emailError) {
+      console.error("Channel partner status email failed:", emailError.message);
+    }
+    return res.json({ message: "Application status updated", emailSent, partner: listRecord(partner) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Channel partner application not found" });
     console.error("Update channel partner status error:", error);

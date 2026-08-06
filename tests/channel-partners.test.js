@@ -45,6 +45,25 @@ describe("Channel partners API", () => {
     expect(stored.bank.accountNumberLast4).toBe("9012");
   });
 
+  it("uses the stable JWT secret when a production deployment has no dedicated channel-partner key", async () => {
+    const encryptionKey = process.env.CHANNEL_PARTNER_ENCRYPTION_KEY;
+    const lookupKey = process.env.CHANNEL_PARTNER_LOOKUP_KEY;
+    delete process.env.CHANNEL_PARTNER_ENCRYPTION_KEY;
+    delete process.env.CHANNEL_PARTNER_LOOKUP_KEY;
+
+    try {
+      const res = await request(app).post("/api/channel-partners").send(validApplication());
+      expect(res.status).toBe(201);
+      expect(res.body.message).toBe("Channel partner registered successfully");
+      const stored = await ChannelPartner.findOne().select("+bank.accountNumberEncrypted");
+      expect(stored.bank.accountNumberEncrypted).not.toContain("123456789012");
+    } finally {
+      process.env.CHANNEL_PARTNER_ENCRYPTION_KEY = encryptionKey;
+      if (lookupKey === undefined) delete process.env.CHANNEL_PARTNER_LOOKUP_KEY;
+      else process.env.CHANNEL_PARTNER_LOOKUP_KEY = lookupKey;
+    }
+  });
+
   it("makes repeat requests idempotent", async () => {
     const first = await request(app).post("/api/channel-partners").set("Idempotency-Key", "repeat-key").send(validApplication());
     const second = await request(app).post("/api/channel-partners").set("Idempotency-Key", "repeat-key").send(validApplication());
@@ -152,6 +171,51 @@ describe("Channel partners API", () => {
     expect(detail.body.partner.bank.accountNumber).toBe("123456789012");
     expect(detail.body.partner.partnerCode).toMatch(/^CT-\d{4,}$/);
     expect(detail.body.partner.reviewHistory).toHaveLength(3);
+  });
+
+  it("keeps the admin detail usable when legacy encrypted values cannot be decrypted", async () => {
+    await request(app).post("/api/channel-partners").send(validApplication());
+    const partner = await ChannelPartner.findOne();
+    await ChannelPartner.collection.updateOne(
+      { _id: partner._id },
+      { $set: { "bank.accountNumberEncrypted": "invalid-value", partnerCodeEncrypted: "invalid-value" } },
+    );
+    const log = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { token } = await createAdminToken();
+    const detail = await request(app).get(`/api/channel-partners/${partner._id}`).set("Authorization", `Bearer ${token}`);
+    expect(detail.status).toBe(200);
+    expect(detail.body.partner.sensitiveDataAvailable).toBe(false);
+    expect(detail.body.partner.decryptionWarnings).toEqual(expect.arrayContaining(["bankAccount", "partnerCode"]));
+    expect(detail.body.partner.bank.accountNumber).toBe("");
+    expect(log).toHaveBeenCalled();
+  });
+
+  it("emails registration and status responses and lets an admin resend the welcome email", async () => {
+    process.env.RESEND_API_KEY = "test-resend-key";
+    const emailRequest = jest.spyOn(global, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: "email-id" }) });
+    const created = await request(app).post("/api/channel-partners").send(validApplication());
+    expect(created.status).toBe(201);
+    expect(created.body.emailSent).toBe(true);
+
+    const partner = await ChannelPartner.findOne();
+    const { token } = await createAdminToken();
+    const suspended = await request(app)
+      .patch(`/api/channel-partners/${partner._id}/status`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ status: "suspended", note: "Compliance documents expired" });
+    expect(suspended.status).toBe(200);
+    expect(suspended.body.emailSent).toBe(true);
+
+    const resent = await request(app)
+      .post(`/api/channel-partners/${partner._id}/resend-registration-email`)
+      .set("Authorization", `Bearer ${token}`);
+    expect(resent.status).toBe(200);
+    expect(emailRequest).toHaveBeenCalledTimes(3);
+    const sentEmails = emailRequest.mock.calls.map(([, options]) => JSON.parse(options.body));
+    expect(sentEmails[0].subject).toContain("Registration Successful");
+    expect(sentEmails[1].subject).toContain("Application Suspended");
+    expect(sentEmails[1].html).toContain("Compliance documents expired");
+    expect(sentEmails[2].subject).toContain("Registration Successful");
   });
 
   it("requires reasons and rejects invalid status transitions", async () => {

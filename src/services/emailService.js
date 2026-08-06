@@ -1,6 +1,7 @@
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 
 async function sendEmail({ to, subject, html, from }) {
+  if (!to) throw new Error("Email recipient is required");
   if (!process.env.RESEND_API_KEY) {
     if (process.env.NODE_ENV !== "production") {
       console.log(`[DEV] Email queued: ${subject} -> ${String(to).replace(/^(.{2}).*(@.*)$/, "$1•••$2")}`);
@@ -18,7 +19,11 @@ async function sendEmail({ to, subject, html, from }) {
       ...(process.env.CHANNEL_PARTNER_REPLY_TO ? { reply_to: process.env.CHANNEL_PARTNER_REPLY_TO } : {}),
     }),
   });
-  if (!response.ok) throw new Error("Email could not be sent");
+  if (!response.ok) {
+    const failure = await response.json().catch(() => ({}));
+    const detail = typeof failure?.message === "string" ? `: ${failure.message}` : "";
+    throw new Error(`Email could not be sent (provider status ${response.status})${detail}`);
+  }
   const data = await response.json().catch(() => ({}));
   return { delivered: true, id: data.id };
 }
@@ -38,13 +43,36 @@ function detailCard(rows) {
 
 const signature = `<p style="margin-top:28px">Regards,<br><strong>ClearTitle One Channel Sales Team</strong></p>`;
 
+function publicAppUrl() {
+  const configured = process.env.PUBLIC_APP_URL || String(process.env.FRONTEND_URL || "").split(",")[0];
+  return (configured.trim() || "http://localhost:5173").replace(/\/$/, "");
+}
+
 async function sendChannelPartnerRegisteredEmail({ email, name, applicationNumber, partnerCode }) {
-  const baseUrl = process.env.PUBLIC_APP_URL || "http://localhost:5173";
-  const registrationUrl = `${baseUrl.replace(/\/$/, "")}/cp-registration`;
+  const registrationUrl = `${publicAppUrl()}/cp-registration`;
   return sendEmail({
     to: email,
     subject: "Welcome to ClearTitle One - Channel Partner Registration Successful",
     html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Channel Partner Registration Successful</h1><p>Dear ${escapeHtml(name || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>Thank you for registering as a Channel Partner. Your account is active and you can now register clients for available projects.</p><div style="background:#fff8e8;border:1px solid #ecd8a8;border-radius:12px;padding:18px;margin:22px 0"><div style="font-size:12px;color:#6a5727">Your Channel Partner Code</div><div style="font-size:28px;font-weight:800;letter-spacing:2px;color:#121b35">${escapeHtml(partnerCode)}</div><div style="margin-top:8px;font-size:12px;color:#6a5727">Application: ${escapeHtml(applicationNumber)}</div></div><p>Use this unique code whenever you register a client. Please keep it private and do not share it with anyone.</p><p><a href="${escapeHtml(registrationUrl)}" style="display:inline-block;background:#ddaa42;color:#0b1328;text-decoration:none;font-weight:700;padding:12px 18px;border-radius:9px">Register a Client</a></p>${signature}`),
+  });
+}
+
+const statusMessages = {
+  active: "Your Channel Partner account is active. You may continue registering clients using your partner code.",
+  under_review: "Our Channel Sales Team has started reviewing your application.",
+  changes_requested: "We need additional information or corrections before we can complete the review.",
+  resubmitted: "We have received your updated application and it is ready for review.",
+  approved: "Your Channel Partner application has been approved.",
+  rejected: "Your Channel Partner application was not approved.",
+  suspended: "Access to your Channel Partner account has been suspended.",
+};
+
+async function sendChannelPartnerStatusEmail({ email, name, applicationNumber, status, note }) {
+  const label = String(status || "updated").replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return sendEmail({
+    to: email,
+    subject: `Channel Partner Application ${label} - ${applicationNumber}`,
+    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Application Status Updated</h1><p>Dear ${escapeHtml(name || "Partner")},</p><p>${escapeHtml(statusMessages[status] || "The status of your Channel Partner application has been updated.")}</p>${detailCard([["Application reference", applicationNumber], ["New status", label], ["Message from our team", note]])}<p>If you need assistance, reply to this email and quote your application reference.</p>${signature}`),
   });
 }
 
@@ -81,7 +109,7 @@ async function sendClientClashOwnerEmail({ email, partnerName, leadNumber, clien
 }
 
 async function sendPasswordResetEmail({ email, name, token }) {
-  const resetBaseUrl = process.env.PUBLIC_APP_URL || "http://localhost:5173";
+  const resetBaseUrl = publicAppUrl();
   const resetUrl = `${resetBaseUrl}/postproperty?resetToken=${encodeURIComponent(token)}&email=${encodeURIComponent(email)}`;
 
   const result = await sendEmail({
@@ -96,6 +124,7 @@ async function sendPasswordResetEmail({ email, name, token }) {
 module.exports = {
   sendPasswordResetEmail,
   sendChannelPartnerRegisteredEmail,
+  sendChannelPartnerStatusEmail,
   sendChannelPartnerClientRegisteredEmail,
   sendSamePartnerClientDuplicateEmail,
   sendClientClashAttemptEmail,

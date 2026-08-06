@@ -14,6 +14,8 @@ services:
         value: 30d
       - key: FRONTEND_URL
         sync: false
+      - key: PUBLIC_APP_URL
+        sync: false
       - key: ADMIN_USERNAME
         sync: false
       - key: ADMIN_PASSWORD
@@ -23,6 +25,16 @@ services:
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: CHANNEL_PARTNER_ENCRYPTION_KEY
+        sync: false
+      - key: CHANNEL_PARTNER_LOOKUP_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: CHANNEL_PARTNER_EMAIL_FROM
+        sync: false
+      - key: CHANNEL_PARTNER_REPLY_TO
         sync: false
       - key: FAST2SMS_API_KEY
         sync: false

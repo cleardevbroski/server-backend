@@ -1,12 +1,12 @@
 const crypto = require("crypto");
 
 function getKey() {
+  // Prefer a dedicated secret, but derive an isolated, stable key from the
+  // application's JWT secret for deployments created before this setting was
+  // introduced. This keeps registration available without storing plaintext.
   const configured = process.env.CHANNEL_PARTNER_ENCRYPTION_KEY;
   if (configured) return crypto.createHash("sha256").update(configured).digest();
-
-  // Keep local development usable without persisting a known/default key.
-  // Production must always use a dedicated, stable encryption secret.
-  if (process.env.NODE_ENV !== "production" && process.env.JWT_SECRET) {
+  if (process.env.JWT_SECRET) {
     return crypto.createHash("sha256").update(`channel-partner:${process.env.JWT_SECRET}`).digest();
   }
 
