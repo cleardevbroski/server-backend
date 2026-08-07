@@ -8,9 +8,16 @@ const adminOnly = require("../middleware/adminOnly");
 const customerOnly = require("../middleware/customerOnly");
 const { linkProperty, unlinkProperty, relinkProperty } = require("../services/propertyLinkSync");
 const { uploadIfBase64, uploadArrayIfBase64 } = require("../utils/mediaUpload");
-const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeRentPayload, normalizeLeasePayload, PropertyPayloadError } = require("../utils/propertyPayload");
+const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, PropertyPayloadError } = require("../utils/propertyPayload");
 
 const router = express.Router();
+const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
+
+function assertPropertyTypeIsSupported(propertyType) {
+  if (RETIRED_PROPERTY_TYPES.includes(String(propertyType || "").trim())) {
+    throw new PropertyPayloadError("Rent and Lease property types are no longer supported");
+  }
+}
 
 function assertPhotoOnlyMedia(body) {
   for (const field of ["heroVideo", "videos", "virtualTourUrl"]) {
@@ -46,8 +53,6 @@ function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
   if (normalizedBody.propertyType === "Plot") return normalizePlotPayload(normalizedBody, { requireStructured });
   if (normalizedBody.propertyType === "Commercial") return normalizeCommercialPayload(normalizedBody, { requireStructured });
   if (normalizedBody.propertyType === "PG/Co-living") return normalizePgPayload(normalizedBody, { requireStructured });
-  if (normalizedBody.propertyType === "Rent") return normalizeRentPayload(normalizedBody, { requireStructured });
-  if (normalizedBody.propertyType === "Lease") return normalizeLeasePayload(normalizedBody, { requireStructured });
   return normalizedBody;
 }
 
@@ -103,8 +108,64 @@ function compactPropertyPayload(value) {
   return value;
 }
 
+function parsePrice(value) {
+  const text = String(value || "").replace(/,/g, "");
+  const match = text.match(/(\d+(?:\.\d+)?)/);
+  if (!match) return Number.NaN;
+  const amount = Number(match[1]);
+  if (/\b(cr|crore)\b/i.test(text)) return amount * 10_000_000;
+  if (/\b(l|lac|lakh)\b/i.test(text)) return amount * 100_000;
+  return amount;
+}
+
+function parseArea(value) {
+  const match = String(value || "").replace(/,/g, "").match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) : Number.NaN;
+}
+
+function localityName(property) {
+  const value = property.locality?.landmark || property.locality?.address || property.subtitle || "";
+  return String(value).split(",")[0].trim();
+}
+
+function propertyPricePerSqft(property) {
+  if (property.propertyType === "PG/Co-living") {
+    const rents = (property.pgDetails?.sharingDetails || [])
+      .map((row) => Number(row.rentPerBed))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (rents.length) return rents.reduce((total, value) => total + value, 0) / rents.length;
+  }
+  if (property.propertyType === "Plot") {
+    const plotRates = (property.plotDetails?.plotSizeDetails || [])
+      .map((row) => Number(row.pricePerSqft))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (plotRates.length) return plotRates.reduce((total, value) => total + value, 0) / plotRates.length;
+  }
+  const direct = parsePrice(property.pricePerSqft);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const rows = property.propertyType === "Villa"
+    ? property.villaDetails?.configurationDetails || []
+    : property.configurationDetails || [];
+  const values = rows.map((row) => {
+    const price = parsePrice(row.price);
+    const area = parseArea(row.builtUpArea || row.superArea || row.plotArea || row.carpetArea);
+    return price > 0 && area > 0 ? price / area : Number.NaN;
+  }).filter(Number.isFinite);
+  if (values.length) return values.reduce((total, value) => total + value, 0) / values.length;
+  const price = parsePrice(property.price);
+  const area = parseArea(
+    property.commercialDetails?.builtUpArea
+      || property.commercialDetails?.superArea
+      || property.commercialDetails?.carpetArea
+      || property.area,
+  );
+  return price > 0 && area > 0 ? price / area : Number.NaN;
+}
+
 function prepareOptionalPropertyPayload(body) {
-  return compactPropertyPayload(withoutWorkflowFields(body)) || {};
+  const payload = compactPropertyPayload(withoutWorkflowFields(body)) || {};
+  assertPropertyTypeIsSupported(payload.propertyType);
+  return payload;
 }
 
 function hasStructuredDetails(body) {
@@ -114,8 +175,6 @@ function hasStructuredDetails(body) {
     case "Plot": return Array.isArray(body.plotDetails?.plotSizeDetails);
     case "Commercial": return Boolean(body.commercialDetails?.commercialSubtype);
     case "PG/Co-living": return Array.isArray(body.pgDetails?.sharingDetails);
-    case "Rent": return Boolean(body.rentDetails?.configuration);
-    case "Lease": return Boolean(body.leaseDetails?.leasePropertyType);
     default: return false;
   }
 }
@@ -134,12 +193,13 @@ function prepareSubmittedPropertyPayload(body, existing) {
   const candidate = existing
     ? { ...withoutWorkflowFields(existing.toObject()), ...compact, propertyType: compact.propertyType || existing.propertyType }
     : compact;
+  assertPropertyTypeIsSupported(candidate.propertyType);
   if (existing) {
     delete candidate.heroVideo;
     delete candidate.videos;
     delete candidate.virtualTourUrl;
   }
-  const structuredTypes = new Set(["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living", "Rent", "Lease"]);
+  const structuredTypes = new Set(["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living"]);
   const incoming = { ...compact, propertyType: compact.propertyType || existing?.propertyType };
   if (hasStructuredDetails(existing ? incoming : candidate)) {
     return withoutWorkflowFields(normalizeStructuredPayload(candidate, { requireStructured: true }));
@@ -177,10 +237,15 @@ router.get("/", async (req, res) => {
       sort = "-createdAt",
     } = req.query;
 
-    const filter = {};
+    const filter = { propertyType: { $nin: RETIRED_PROPERTY_TYPES } };
 
     if (city) filter["locality.city"] = String(city);
-    if (propertyType) filter.propertyType = String(propertyType);
+    if (propertyType) {
+      if (RETIRED_PROPERTY_TYPES.includes(String(propertyType))) {
+        return res.json({ properties: [], pagination: { page: parseInt(page), limit: Math.min(Math.max(parseInt(limit) || 20, 1), 100), total: 0, pages: 0 } });
+      }
+      filter.propertyType = String(propertyType);
+    }
     if (bedrooms) {
       const b = parseInt(bedrooms);
       if (Number.isInteger(b)) {
@@ -472,6 +537,7 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOnly, a
     }
     const property = await Property.findOne({
       _id: req.params.id,
+      propertyType: { $nin: RETIRED_PROPERTY_TYPES },
       $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
     });
     if (!property) return res.status(404).json({ error: "Property not found" });
@@ -522,6 +588,7 @@ router.get("/:id/project-downloads/:documentId/download", auth, customerOnly, as
     }
     const property = await Property.findOne({
       _id: req.params.id,
+      propertyType: { $nin: RETIRED_PROPERTY_TYPES },
       $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
     });
     if (!property) return res.status(404).json({ error: "Property not found" });
@@ -559,6 +626,50 @@ router.get("/:id/project-downloads/:documentId/download", auth, customerOnly, as
   }
 });
 
+// ─── GET /api/properties/price-comparison/:id ───────────────
+// Derived at request time from currently visible listings, so newly published
+// projects automatically affect the locality averages without altering prices.
+router.get("/price-comparison/:id", async (req, res) => {
+  try {
+    const visible = { $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }] };
+    const target = await Property.findOne({ _id: req.params.id, propertyType: { $nin: RETIRED_PROPERTY_TYPES }, ...visible }).lean();
+    if (!target) return res.status(404).json({ error: "Property not found" });
+    const targetLocation = localityName(target);
+    if (!targetLocation) return res.json({ currentLocation: "", comparisons: [] });
+    const filter = { propertyType: target.propertyType, ...visible };
+    if (target.listingType) filter.listingType = target.listingType;
+    if (target.locality?.city) filter["locality.city"] = target.locality.city;
+    const projects = await Property.find(filter)
+      .select("propertyType listingType price pricePerSqft area subtitle locality configurationDetails villaDetails plotDetails commercialDetails pgDetails")
+      .lean();
+    const groups = new Map();
+    projects.forEach((project) => {
+      const location = localityName(project);
+      const pricePerSqft = propertyPricePerSqft(project);
+      if (!location || !Number.isFinite(pricePerSqft) || pricePerSqft <= 0) return;
+      const group = groups.get(location.toLowerCase()) || { location, values: [] };
+      group.values.push(pricePerSqft);
+      groups.set(location.toLowerCase(), group);
+    });
+    const currentKey = targetLocation.toLowerCase();
+    const comparisons = [...groups.entries()].map(([key, group]) => ({
+      key,
+      location: group.location,
+      averagePricePerSqft: Math.round(group.values.reduce((sum, value) => sum + value, 0) / group.values.length),
+      projectCount: group.values.length,
+    }));
+    const current = comparisons.find((item) => item.key === currentKey);
+    const closest = comparisons.filter((item) => item.key !== currentKey)
+      .sort((a, b) => Math.abs(a.averagePricePerSqft - (current?.averagePricePerSqft || 0)) - Math.abs(b.averagePricePerSqft - (current?.averagePricePerSqft || 0)))
+      .slice(0, 4);
+    return res.json({ comparisonMetric: target.propertyType === "PG/Co-living" ? "monthlyRentPerBed" : "pricePerSqft", currentLocation: targetLocation, comparisons: current ? [current, ...closest] : closest });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
+    console.error("Property price comparison error:", error);
+    return res.status(500).json({ error: "Unable to calculate location price comparison" });
+  }
+});
+
 // ─── GET /api/properties/:id ────────────────────────────────
 // Get single property (public — only approved/legacy-visible)
 router.get("/:id", async (req, res) => {
@@ -566,6 +677,7 @@ router.get("/:id", async (req, res) => {
     // DBG010: Apply same visibility clause as list route so pending/rejected are not publicly accessible
     const property = await Property.findOne({
       _id: req.params.id,
+      propertyType: { $nin: RETIRED_PROPERTY_TYPES },
       $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
     })
       .populate("postedBy", "name phone")

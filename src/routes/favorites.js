@@ -7,6 +7,7 @@ const Property = require("../models/Property");
 
 const router = express.Router();
 const visibleProperty = {
+  propertyType: { $nin: ["Rent", "Lease"] },
   $or: [
     { status: { $in: ["approved", "published"] } },
     { status: { $exists: false }, published: { $ne: false } },

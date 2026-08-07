@@ -166,6 +166,38 @@ describe("Hero Banners API", () => {
     expect(promoted.resolvedDetails.configuration).toBe("2 BHK");
   });
 
+  it("resolves PG and co-living details for the public hero header", async () => {
+    const property = await Property.create({
+      title: "Whitefield Co-Living",
+      subtitle: "Whitefield, Bangalore",
+      image: "pg-cover.jpg",
+      propertyType: "PG/Co-living",
+      status: "approved",
+      published: true,
+      pgDetails: {
+        genderPreference: "Co-ed",
+        sharingDetails: [{ sharingType: "Double sharing", rentPerBed: 12000, deposit: 24000, bedsAvailable: 6 }],
+        mealsIncluded: "Breakfast + Dinner",
+        wifiIncluded: true,
+        laundryIncluded: true,
+        availableFrom: "2030-01-01",
+        commonAmenities: [],
+        contactType: "PG Manager",
+      },
+    });
+    await HeroBanner.create({ image: "pg-cover.jpg", title: property.title, propertyId: property._id, published: true, displayOnHomepage: true });
+
+    const res = await request(app).get("/api/hero/banners");
+    const banner = res.body.banners.find((item) => item.propertyId === property._id.toString());
+
+    expect(banner.priceText).toBe("₹12,000 / month");
+    expect(banner.resolvedDetails).toMatchObject({
+      propertyType: "PG/Co-living",
+      configuration: "Double sharing",
+    });
+    expect(banner.resolvedDetails.structure).toContain("Co-ed");
+  });
+
   it("prevents duplicate slot and property assignments while allowing other slots to remain empty", async () => {
     const { token } = await createAdminToken();
     const first = await Property.create({ title: "First", price: "₹1 Cr", image: "first.jpg", status: "approved", published: true });

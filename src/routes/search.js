@@ -3,6 +3,7 @@ const rateLimit = require("express-rate-limit");
 const Property = require("../models/Property");
 
 const router = express.Router();
+const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
 
 const searchLimiter = rateLimit({
   windowMs: 60 * 1000,
@@ -15,10 +16,15 @@ router.get("/", searchLimiter, async (req, res) => {
   try {
     const { q, city, type, min, max, bhk, sort = "-createdAt", page = 1, limit = 20 } = req.query;
 
-    const filter = {};
+    const filter = { propertyType: { $nin: RETIRED_PROPERTY_TYPES } };
     if (q) filter.$text = { $search: String(q) };
     if (city) filter["locality.city"] = String(city);
-    if (type) filter.propertyType = String(type);
+    if (type) {
+      if (RETIRED_PROPERTY_TYPES.includes(String(type))) {
+        return res.json({ properties: [], pagination: { page: parseInt(page), limit: Math.min(Math.max(parseInt(limit) || 20, 1), 100), total: 0, pages: 0 } });
+      }
+      filter.propertyType = String(type);
+    }
     if (bhk) {
       const b = parseInt(bhk);
       if (Number.isInteger(b)) filter.$and = [{ $or: [

@@ -20,7 +20,7 @@ describe("cross-property locality and neighbourhood workflow", () => {
       },
     };
 
-    for (const propertyType of ["Apartment", "Villa", "Plot", "Rent", "Commercial", "PG/Co-living", "Lease"]) {
+    for (const propertyType of ["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living"]) {
       const response = await request(app)
         .post("/api/properties/public")
         .set("Authorization", `Bearer ${token}`)

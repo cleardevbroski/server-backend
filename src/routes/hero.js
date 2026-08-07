@@ -52,13 +52,46 @@ function propertyDefaults(property) {
     builderName: property.builder || "",
     title: property.title || "",
     location: property.subtitle || [property.locality?.landmark, property.locality?.city].filter(Boolean).join(", "),
-    priceText: property.price || "",
+    priceText: propertyHeroPrice(property),
     rera: property.reraNumber || "",
     badge: property.badges?.[0] || "Featured",
     ctaText: "Explore Now",
     linkType: "property",
     linkValue: propertyId,
   };
+}
+
+function formatRupees(value) {
+  const amount = Number(value);
+  return Number.isFinite(amount) && amount > 0 ? `₹${amount.toLocaleString("en-IN")}` : "";
+}
+
+function propertyHeroPrice(property) {
+  if (property?.price) return property.price;
+  if (property?.propertyType === "PG/Co-living") {
+    const rents = (property.pgDetails?.sharingDetails || []).map((item) => Number(item.rentPerBed)).filter((value) => Number.isFinite(value) && value > 0);
+    if (rents.length) return `${formatRupees(Math.min(...rents))} / month`;
+  }
+  if (property?.propertyType === "Plot") {
+    const prices = (property.plotDetails?.plotSizeDetails || []).map((item) => Number(item.totalPrice)).filter((value) => Number.isFinite(value) && value > 0);
+    if (prices.length) return `From ${formatRupees(Math.min(...prices))}`;
+  }
+  return "";
+}
+
+function propertyHeroArea(property) {
+  if (property?.area) return property.area;
+  if (property?.propertyType === "Villa") {
+    const row = property.villaDetails?.configurationDetails?.[0];
+    return row?.superArea || row?.builtUpArea || row?.plotArea || "";
+  }
+  if (property?.propertyType === "Plot") {
+    return property.plotDetails?.plotSizeDetails?.map((item) => item.plotSize || (item.areaSqft ? `${item.areaSqft} sq.ft.` : "")).filter(Boolean).join(", ") || "";
+  }
+  if (property?.propertyType === "Commercial") {
+    return property.commercialDetails?.superArea || property.commercialDetails?.builtUpArea || property.commercialDetails?.carpetArea || "";
+  }
+  return "";
 }
 
 function propertyStructure(property) {
@@ -76,6 +109,14 @@ function propertyStructure(property) {
   if (property.propertyType === "Commercial" && property.commercialDetails) {
     return [property.commercialDetails.commercialSubtype, property.commercialDetails.buildingGrade, property.commercialDetails.structure].filter(Boolean).join(" · ");
   }
+  if (property.propertyType === "PG/Co-living" && property.pgDetails) {
+    return [
+      property.pgDetails.sharingDetails?.map((item) => item.sharingType).filter(Boolean).join(", "),
+      property.pgDetails.genderPreference,
+      property.pgDetails.mealsIncluded,
+      property.pgDetails.contactType,
+    ].filter(Boolean).join(" · ");
+  }
   return [property.propertyType === "Apartment" ? "" : property.floor, property.totalFloors && `${property.totalFloors} total floors`].filter(Boolean).join(" · ");
 }
 
@@ -85,6 +126,7 @@ function resolvePromotionBanner(banner, property) {
     || property.configurationDetails?.map((item) => item.configuration).join(", ")
     || property.villaDetails?.configurationDetails?.map((item) => item.configuration).join(", ")
     || property.rentDetails?.configuration
+    || property.pgDetails?.sharingDetails?.map((item) => item.sharingType).filter(Boolean).join(", ")
     || "";
   return {
     ...banner,
@@ -92,14 +134,14 @@ function resolvePromotionBanner(banner, property) {
     title: overrideValue(overrides, "title", property.title || ""),
     builderName: overrideValue(overrides, "builder", property.builder || ""),
     location: overrideValue(overrides, "location", property.subtitle || ""),
-    priceText: overrideValue(overrides, "price", property.price || ""),
+    priceText: overrideValue(overrides, "price", propertyHeroPrice(property)),
     rera: overrideValue(overrides, "reraNumber", property.reraNumber || ""),
     linkType: "property",
     linkValue: property._id.toString(),
     resolvedDetails: {
       propertyType: overrideValue(overrides, "propertyType", property.propertyType || ""),
       possession: overrideValue(overrides, "possession", property.possessionDetails?.status || property.possession || ""),
-      area: overrideValue(overrides, "area", property.area || ""),
+      area: overrideValue(overrides, "area", propertyHeroArea(property)),
       configuration: overrideValue(overrides, "configuration", configuration),
       structure: overrideValue(overrides, "structure", propertyStructure(property)),
       amenities: overrideValue(overrides, "amenities", property.amenities?.join(", ") || ""),
@@ -256,7 +298,7 @@ router.get("/banners", async (req, res) => {
     });
     const propertyIds = banners.map((banner) => banner.propertyId).filter(Boolean);
     const properties = propertyIds.length
-      ? await Property.find({ _id: { $in: propertyIds } }).lean()
+      ? await Property.find({ _id: { $in: propertyIds }, propertyType: { $nin: ["Rent", "Lease"] } }).lean()
       : [];
     const propertiesById = new Map(properties.map((property) => [property._id.toString(), property]));
     const mapped = banners

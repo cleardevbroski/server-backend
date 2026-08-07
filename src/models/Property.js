@@ -325,6 +325,7 @@ const propertySchema = new mongoose.Schema(
     area: { type: String, default: "" },
     projectArea: { type: projectAreaSchema, default: undefined },
     totalUnits: { type: Number, min: 1 },
+    totalTowers: { type: Number, min: 1 },
     projectNarrative: { type: projectNarrativeSchema, default: undefined },
     masterPlan: { type: masterPlanSchema, default: undefined },
     projectDownloads: { type: [projectDownloadSchema], default: [] },
@@ -405,6 +406,9 @@ const propertySchema = new mongoose.Schema(
       hospitals: { type: String, default: "" },
       shopping: { type: String, default: "" },
       metro: { type: String, default: "" },
+      workplaces: { type: String, default: "" },
+      parks: { type: String, default: "" },
+      roads: { type: String, default: "" },
     },
 
     nearbyDetails: {
@@ -413,6 +417,9 @@ const propertySchema = new mongoose.Schema(
       hospitals: { type: nearbyDetailSchema, default: undefined },
       shopping: { type: nearbyDetailSchema, default: undefined },
       metro: { type: nearbyDetailSchema, default: undefined },
+      workplaces: { type: nearbyDetailSchema, default: undefined },
+      parks: { type: nearbyDetailSchema, default: undefined },
+      roads: { type: nearbyDetailSchema, default: undefined },
     },
 
     reraRegistered: { type: Boolean, default: false },

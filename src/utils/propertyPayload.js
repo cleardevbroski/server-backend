@@ -382,7 +382,7 @@ function deriveRange(rows, field) {
 function validateNearbyDetails(nearbyDetails) {
   if (!nearbyDetails || typeof nearbyDetails !== "object") return nearbyDetails;
   const result = {};
-  for (const key of ["schools", "colleges", "hospitals", "shopping", "metro"]) {
+  for (const key of ["schools", "colleges", "hospitals", "shopping", "metro", "workplaces", "parks", "roads"]) {
     const item = nearbyDetails[key];
     if (!item) continue;
     const places = Array.isArray(item.places)
@@ -465,10 +465,7 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
     const totalAcres = optionalPositiveNumber(projectArea.totalAcres, "Total project area");
     const openSpaceAcres = optionalPositiveNumber(projectArea.openSpaceAcres, "Open space area");
     const builtUpAcres = optionalPositiveNumber(projectArea.builtUpAcres, "Apartment built-up area");
-    if ([totalAcres, openSpaceAcres, builtUpAcres].some((value) => value === undefined)) {
-      throw new PropertyPayloadError("Total, open-space, and apartment built-up areas are all required");
-    }
-    if (Math.abs(totalAcres - openSpaceAcres - builtUpAcres) > 0.001) {
+    if ([totalAcres, openSpaceAcres, builtUpAcres].every((value) => value !== undefined) && Math.abs(totalAcres - openSpaceAcres - builtUpAcres) > 0.001) {
       throw new PropertyPayloadError("Open space and apartment built-up area must equal the total project area");
     }
     payload.projectArea = { totalAcres, openSpaceAcres, builtUpAcres };
@@ -478,6 +475,9 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   payload.totalUnits = payload.totalUnits === undefined || payload.totalUnits === null || payload.totalUnits === ""
     ? undefined
     : requireInteger(payload.totalUnits, "Total number of units", 1);
+  payload.totalTowers = payload.totalTowers === undefined || payload.totalTowers === null || payload.totalTowers === ""
+    ? undefined
+    : requireInteger(payload.totalTowers, "Total number of towers", 1);
   payload.ownershipType = undefined;
   payload.bookingAmount = undefined;
   if (String(payload.description || "").trim().length < 50) {
@@ -876,111 +876,6 @@ function normalizePgPayload(input, { requireStructured = false } = {}) {
   payload.pgDetails = { genderPreference: details.genderPreference, sharingDetails: rows, mealsIncluded: details.mealsIncluded, foodType: hasMeals ? details.foodType : "", wifiIncluded: requireBoolean(details.wifiIncluded, "Wi-Fi included"), laundryIncluded: requireBoolean(details.laundryIncluded, "Laundry included"), laundrySchedule: details.laundryIncluded ? String(details.laundrySchedule).trim() : "", housekeeping: String(details.housekeeping || "").trim(), curfewEntryTiming: String(details.curfewEntryTiming || "").trim(), visitorsAllowed: String(details.visitorsAllowed || "").trim(), noticePeriod: String(details.noticePeriod || "").trim(), lockInPeriod: String(details.lockInPeriod || "").trim(), idProofRequired: String(details.idProofRequired || "").trim(), utilitiesIncluded: String(details.utilitiesIncluded || "").trim(), availableFrom: details.availableFrom, commonAmenities: Array.isArray(details.commonAmenities) ? [...new Set(details.commonAmenities.map(String))] : [], contactType: details.contactType };
   payload.configurationDetails = undefined; payload.villaDetails = undefined; payload.plotDetails = undefined; payload.commercialDetails = undefined; payload.possessionDetails = undefined; payload.bedrooms = undefined; payload.bathrooms = undefined; payload.floorLabel = undefined; payload.totalFloors = undefined; payload.furnishing = undefined; payload.parking = undefined; payload.facing = undefined; payload.configs = rows.map((row) => row.sharingType); payload.price = `₹${Math.min(...rows.map((row) => row.rentPerBed)).toLocaleString("en-IN")}/month`; payload.pricePerSqft = ""; payload.area = ""; payload.possession = `Available from ${details.availableFrom}`; payload.ageOfProperty = ""; return payload;
 }
-function getBrokerageBadges(badges, contactType) {
-  const nextBadges = (badges || []).filter((badge) => badge !== "Zero Brokerage");
-  if (contactType === "Owner") nextBadges.push("Zero Brokerage");
-  return nextBadges;
-}
-
-function normalizeRentPayload(input, { requireStructured = false } = {}) {
-  const payload = { ...input };
-  const details = payload.rentDetails;
-
-  if (!details && !requireStructured) return payload;
-  if (!details || typeof details !== "object") {
-    throw new PropertyPayloadError("Rent details are required");
-  }
-  if (!["Apartment", "Villa", "Independent House"].includes(details.rentalPropertyType)) {
-    throw new PropertyPayloadError("Select a valid rental property type");
-  }
-
-  const configuration = String(details.configuration || "").trim();
-  if (!configuration) throw new PropertyPayloadError("Rental configuration is required");
-
-  const monthlyRent = requireInteger(details.monthlyRent, "Monthly rent", 1);
-  const securityDeposit = requireInteger(details.securityDeposit, "Security deposit", 0);
-  if (!isCalendarDate(details.availableFrom)) {
-    throw new PropertyPayloadError("Available-from date is required");
-  }
-  if (!["Owner", "Broker"].includes(details.contactType)) {
-    throw new PropertyPayloadError("Select Owner or Broker");
-  }
-  validateSharedStructuredFields(payload, "Rent");
-
-  payload.rentDetails = {
-    ...details,
-    configuration,
-    monthlyRent,
-    securityDeposit,
-    maintenanceMode: undefined,
-    maintenanceAmount: undefined,
-    preferredTenantTypes: Array.isArray(details.preferredTenantTypes)
-      ? [...new Set(details.preferredTenantTypes.map(String))]
-      : [],
-  };
-  payload.listingType = "For Rent";
-  payload.configurationDetails = undefined;
-  payload.villaDetails = undefined;
-  payload.plotDetails = undefined;
-  payload.commercialDetails = undefined;
-  payload.pgDetails = undefined;
-  payload.possessionDetails = undefined;
-  payload.configs = [configuration];
-  payload.price = `₹${monthlyRent.toLocaleString("en-IN")}/month`;
-  payload.area = details.superArea || details.carpetArea || "";
-  payload.bedrooms = details.bedrooms;
-  payload.bathrooms = details.bathrooms;
-  payload.facing = details.facing;
-  payload.parking = details.parking;
-  payload.furnishing = details.furnishing;
-  payload.badges = getBrokerageBadges(payload.badges, details.contactType);
-  return payload;
-}
-
-function normalizeLeasePayload(input, { requireStructured = false } = {}) {
-  const payload = { ...input };
-  const details = payload.leaseDetails;
-
-  if (!details && !requireStructured) return payload;
-  if (!details) throw new PropertyPayloadError("Lease details are required");
-  if (!["Commercial", "Residential"].includes(details.leasePropertyType)) {
-    throw new PropertyPayloadError("Select a lease property type");
-  }
-
-  const leaseRent = requireInteger(details.leaseRent, "Lease rent", 1);
-  const securityDeposit = requireInteger(details.securityDeposit, "Security deposit", 0);
-  if (!String(details.leaseTenure || "").trim()) {
-    throw new PropertyPayloadError("Lease tenure is required");
-  }
-  if (!isCalendarDate(details.availableFrom)) {
-    throw new PropertyPayloadError("Available-from date is required");
-  }
-  if (!["Tenant", "Owner", "Shared"].includes(details.registrationStampDutyResponsibility)) {
-    throw new PropertyPayloadError("Select registration responsibility");
-  }
-  if (!["Owner", "Broker"].includes(details.contactType)) {
-    throw new PropertyPayloadError("Select Owner or Broker");
-  }
-  validateSharedStructuredFields(payload, "Lease");
-
-  payload.leaseDetails = { ...details, leaseRent, securityDeposit, camCharges: undefined };
-  payload.listingType = "For Rent";
-  payload.price = `₹${leaseRent.toLocaleString("en-IN")}/month`;
-  payload.pricePerSqft = details.rentPerSqft ? `₹${details.rentPerSqft}/sqft` : "";
-  payload.area = details.superArea || details.carpetArea || "";
-  payload.configs = [details.leasePropertyType];
-  payload.possession = `Available from ${details.availableFrom}`;
-  payload.configurationDetails = undefined;
-  payload.villaDetails = undefined;
-  payload.plotDetails = undefined;
-  payload.commercialDetails = undefined;
-  payload.pgDetails = undefined;
-  payload.rentDetails = undefined;
-  payload.possessionDetails = undefined;
-  payload.badges = getBrokerageBadges(payload.badges, details.contactType);
-  return payload;
-}
-
 module.exports = {
   FACING_OPTIONS,
   PropertyPayloadError,
@@ -990,6 +885,4 @@ module.exports = {
   normalizePlotPayload,
   normalizeCommercialPayload,
   normalizePgPayload,
-  normalizeRentPayload,
-  normalizeLeasePayload,
 };
