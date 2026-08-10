@@ -8,6 +8,64 @@ cloudinary.config({
 
 const isBase64DataUri = (value) => typeof value === "string" && value.startsWith("data:");
 
+function cloudinaryAssetFromUrl(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    const url = new URL(value.trim());
+    if (url.hostname !== "res.cloudinary.com") return null;
+    const parts = url.pathname.split("/").filter(Boolean);
+    const uploadIndex = parts.indexOf("upload");
+    if (uploadIndex < 2 || parts[0] !== process.env.CLOUDINARY_CLOUD_NAME) return null;
+    const resourceType = parts[1];
+    if (!["image", "raw", "video"].includes(resourceType)) return null;
+    const assetParts = parts.slice(uploadIndex + 1);
+    if (/^v\d+$/.test(assetParts[0] || "")) assetParts.shift();
+    let publicId = decodeURIComponent(assetParts.join("/"));
+    if (resourceType !== "raw") publicId = publicId.replace(/\.[a-z0-9]+$/i, "");
+    if (!publicId.startsWith("clear-title/properties/")) return null;
+    return { url: value.trim(), publicId, resourceType };
+  } catch {
+    return null;
+  }
+}
+
+function collectPropertyMediaAssets(value, assets = new Map()) {
+  if (typeof value === "string") {
+    const asset = cloudinaryAssetFromUrl(value);
+    if (asset) assets.set(`${asset.resourceType}:${asset.publicId}`, asset);
+    return [...assets.values()];
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectPropertyMediaAssets(item, assets));
+    return [...assets.values()];
+  }
+  if (value && typeof value === "object") {
+    Object.values(value).forEach((item) => collectPropertyMediaAssets(item, assets));
+  }
+  return [...assets.values()];
+}
+
+async function deleteCloudinaryAssets(assets) {
+  const groups = new Map();
+  for (const candidate of assets || []) {
+    const asset = candidate.publicId ? candidate : cloudinaryAssetFromUrl(candidate.url || candidate);
+    if (!asset) continue;
+    const key = asset.resourceType;
+    if (!groups.has(key)) groups.set(key, new Set());
+    groups.get(key).add(asset.publicId);
+  }
+  for (const [resourceType, ids] of groups) {
+    const list = [...ids];
+    for (let index = 0; index < list.length; index += 100) {
+      await cloudinary.api.delete_resources(list.slice(index, index + 100), {
+        resource_type: resourceType,
+        type: "upload",
+        invalidate: true,
+      });
+    }
+  }
+}
+
 async function uploadIfBase64(value, { resourceType = "image", folder } = {}) {
   if (!isBase64DataUri(value)) return value;
   const result = await cloudinary.uploader.upload(value, { resource_type: resourceType, folder });
@@ -86,4 +144,12 @@ function uploadRequestStream(request, { resourceType, folder, maxBytes, mime }) 
   });
 }
 
-module.exports = { uploadIfBase64, uploadArrayIfBase64, uploadRequestStream, hasValidSignature };
+module.exports = {
+  uploadIfBase64,
+  uploadArrayIfBase64,
+  uploadRequestStream,
+  hasValidSignature,
+  cloudinaryAssetFromUrl,
+  collectPropertyMediaAssets,
+  deleteCloudinaryAssets,
+};

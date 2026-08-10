@@ -187,6 +187,7 @@ router.post(
         return res.json({
           message: "OTP sent successfully",
           mode: result.mode, // "dev" or "sms"
+          ...(result.mode === "dev" && result.devOtp ? { devOtp: result.devOtp } : {}),
         });
       } else {
         return res.status(result.statusCode || 500).json({ error: result.error || "Failed to send OTP" });

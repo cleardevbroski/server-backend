@@ -376,6 +376,9 @@ const propertySchema = new mongoose.Schema(
     },
     heroVideo: { type: String, default: "", trim: true },
     images: [{ type: String }],
+    // Permanent ownership ledger. Removing a photo from a visible gallery does
+    // not remove it from storage; the ledger is cleaned only with the project.
+    mediaAssets: [{ type: String, trim: true }],
     videos: [{ type: String }],
     brochure: { type: String, default: "" },
     brochureName: { type: String, default: "" },

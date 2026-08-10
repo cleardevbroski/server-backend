@@ -3,11 +3,17 @@ const { body, query, validationResult } = require("express-validator");
 const Property = require("../models/Property");
 const Lead = require("../models/Lead");
 const FavoriteProperty = require("../models/FavoriteProperty");
+const MediaCleanupJob = require("../models/MediaCleanupJob");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const customerOnly = require("../middleware/customerOnly");
 const { linkProperty, unlinkProperty, relinkProperty } = require("../services/propertyLinkSync");
-const { uploadIfBase64, uploadArrayIfBase64 } = require("../utils/mediaUpload");
+const {
+  uploadIfBase64,
+  uploadArrayIfBase64,
+  collectPropertyMediaAssets,
+  deleteCloudinaryAssets,
+} = require("../utils/mediaUpload");
 const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, PropertyPayloadError } = require("../utils/propertyPayload");
 
 const router = express.Router();
@@ -29,15 +35,19 @@ function assertPhotoOnlyMedia(body) {
 
 async function convertPropertyMedia(body) {
   assertPhotoOnlyMedia(body);
-  const [image, developerLogoUrl, localityMapImageUrl, heroImages, images, brochure] = await Promise.all([
-    uploadIfBase64(body.image, { resourceType: "image", folder: "clear-title/properties" }),
-    uploadIfBase64(body.developerLogoUrl, { resourceType: "image", folder: "clear-title/properties/developers" }),
-    uploadIfBase64(body.localityMapImageUrl, { resourceType: "image", folder: "clear-title/properties/locality-maps" }),
-    uploadArrayIfBase64(body.heroImages, { resourceType: "image", folder: "clear-title/properties/hero" }),
-    uploadArrayIfBase64(body.images, { resourceType: "image", folder: "clear-title/properties" }),
-    uploadIfBase64(body.brochure, { resourceType: "raw", folder: "clear-title/properties/brochures" }),
-  ]);
-  return { ...body, image, developerLogoUrl, localityMapImageUrl, heroImages, images, brochure };
+  const converted = { ...body };
+  const conversions = [
+    ["image", () => uploadIfBase64(body.image, { resourceType: "image", folder: "clear-title/properties" })],
+    ["developerLogoUrl", () => uploadIfBase64(body.developerLogoUrl, { resourceType: "image", folder: "clear-title/properties/developers" })],
+    ["localityMapImageUrl", () => uploadIfBase64(body.localityMapImageUrl, { resourceType: "image", folder: "clear-title/properties/locality-maps" })],
+    ["heroImages", () => uploadArrayIfBase64(body.heroImages, { resourceType: "image", folder: "clear-title/properties/hero" })],
+    ["images", () => uploadArrayIfBase64(body.images, { resourceType: "image", folder: "clear-title/properties" })],
+    ["brochure", () => uploadIfBase64(body.brochure, { resourceType: "raw", folder: "clear-title/properties/brochures" })],
+  ].filter(([field]) => Object.prototype.hasOwnProperty.call(body, field));
+  await Promise.all(conversions.map(async ([field, convert]) => {
+    converted[field] = await convert();
+  }));
+  return converted;
 }
 
 function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
@@ -58,7 +68,7 @@ function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
 
 function withoutWorkflowFields(body) {
   const clean = { ...body };
-  for (const key of ["_id", "id", "postedBy", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt"]) {
+  for (const key of ["_id", "id", "postedBy", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed"]) {
     delete clean[key];
   }
   delete clean.maintenanceCharges;
@@ -78,7 +88,7 @@ function withoutWorkflowFields(body) {
 
 function presentProperty(property, { includeDocumentUrls = false } = {}) {
   const source = typeof property.toObject === "function" ? property.toObject() : property;
-  const { heroVideo, videos, virtualTourUrl, ...visibleProperty } = source;
+  const { heroVideo, videos, virtualTourUrl, mediaAssets, ...visibleProperty } = source;
   if (!includeDocumentUrls && Array.isArray(visibleProperty.reraPhases)) {
     visibleProperty.reraPhases = visibleProperty.reraPhases.map((phase) => ({
       ...phase,
@@ -90,6 +100,29 @@ function presentProperty(property, { includeDocumentUrls = false } = {}) {
     visibleProperty.projectDownloads = visibleProperty.projectDownloads.map(({ fileUrl, ...document }) => document);
   }
   return { ...visibleProperty, id: source._id.toString() };
+}
+
+function withMediaLedger(payload, existing) {
+  const urls = new Set(existing?.mediaAssets || []);
+  for (const asset of collectPropertyMediaAssets(existing ? existing.toObject() : {})) urls.add(asset.url);
+  for (const asset of collectPropertyMediaAssets(payload)) urls.add(asset.url);
+  return { ...payload, mediaAssets: [...urls] };
+}
+
+const PROTECTED_MEDIA_FIELDS = ["image", "heroImages", "images", "developerLogoUrl", "localityMapImageUrl"];
+
+function preserveMediaOnImplicitClear(body, existing, updates) {
+  if (body.mediaRemovalConfirmed === true) return updates;
+  const safe = { ...updates };
+  for (const field of PROTECTED_MEDIA_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    const previous = existing[field];
+    const next = body[field];
+    const hadMedia = Array.isArray(previous) ? previous.some(Boolean) : Boolean(previous);
+    const clearsMedia = Array.isArray(next) ? !next.some(Boolean) : !String(next || "").trim();
+    if (hadMedia && clearsMedia) delete safe[field];
+  }
+  return safe;
 }
 
 function compactPropertyPayload(value) {
@@ -509,8 +542,12 @@ router.put("/my/:id/resubmit", auth, customerOnly, async (req, res) => {
     if (!["draft", "changes_requested"].includes(property.status)) {
       return res.status(409).json({ error: "This property cannot be resubmitted in its current status" });
     }
-    const normalized = prepareSubmittedPropertyPayload(req.body, property);
-    property.set(await convertPropertyMedia(normalized));
+    const normalized = preserveMediaOnImplicitClear(
+      req.body,
+      property,
+      prepareSubmittedPropertyPayload(req.body, property)
+    );
+    property.set(withMediaLedger(await convertPropertyMedia(normalized), property));
     property.status = property.status === "draft" ? "submitted" : "resubmitted";
     property.published = false;
     property.verified = false;
@@ -710,12 +747,12 @@ router.post(
     try {
       const normalizedBody = prepareSubmittedPropertyPayload(req.body);
       const hasTitle = typeof normalizedBody.title === "string" && Boolean(normalizedBody.title.trim());
-      const propertyData = {
+      const propertyData = withMediaLedger({
         ...(await convertPropertyMedia(normalizedBody)),
         ...(!hasTitle ? { status: "pending", published: false } : {}),
         postedBy: req.user._id,
         postedDate: new Date().toISOString(),
-      };
+      });
 
       const property = await Property.create(propertyData);
       await linkProperty(property);
@@ -751,9 +788,13 @@ router.put(
         builderId: existing.builderId,
       };
 
-      const normalizedUpdates = prepareSubmittedPropertyPayload(req.body, existing);
+      const normalizedUpdates = preserveMediaOnImplicitClear(
+        req.body,
+        existing,
+        prepareSubmittedPropertyPayload(req.body, existing)
+      );
       const updates = await convertPropertyMedia(includeAdminWorkflowFields(normalizedUpdates, req.body));
-      existing.set(updates);
+      existing.set(withMediaLedger(updates, existing));
       const property = await existing.save();
 
       if ("builderId" in req.body) {
@@ -776,20 +817,86 @@ router.put(
   }
 );
 
+// Workflow-only mutations never pass through the editable property payload and
+// therefore cannot replace or clear project media.
+router.patch("/:id/workflow", auth, adminOnly, async (req, res) => {
+  try {
+    const allowed = ["status", "published", "verified", "featured"];
+    const updates = Object.fromEntries(
+      allowed
+        .filter((key) => Object.prototype.hasOwnProperty.call(req.body, key))
+        .map((key) => [key, req.body[key]])
+    );
+    if (!Object.keys(updates).length) return res.status(400).json({ error: "No workflow fields supplied" });
+    const property = await Property.findById(req.params.id);
+    if (!property) return res.status(404).json({ error: "Property not found" });
+    property.set(updates);
+    await property.save();
+    return res.json({
+      message: "Property workflow updated",
+      property: presentProperty(property, { includeDocumentUrls: true }),
+    });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
+    if (error.name === "ValidationError") return res.status(400).json({ error: error.message });
+    console.error("Update property workflow error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // ─── DELETE /api/properties/:id ─────────────────────────────────
 // Delete property (admin only)
 router.delete("/:id", auth, adminOnly, async (req, res) => {
   try {
-    const property = await Property.findByIdAndDelete(req.params.id);
+    const property = await Property.findById(req.params.id);
 
     if (!property) {
       return res.status(404).json({ error: "Property not found" });
     }
 
+    const ownedAssets = collectPropertyMediaAssets({
+      property: property.toObject(),
+      mediaAssets: property.mediaAssets || [],
+    });
+    const otherProperties = await Property.find({ _id: { $ne: property._id } }).lean();
+    const referencedElsewhere = new Set(
+      otherProperties
+        .flatMap((item) => collectPropertyMediaAssets(item))
+        .map((asset) => `${asset.resourceType}:${asset.publicId}`)
+    );
+    const exclusiveAssets = ownedAssets.filter(
+      (asset) => !referencedElsewhere.has(`${asset.resourceType}:${asset.publicId}`)
+    );
+
+    await Property.deleteOne({ _id: property._id });
+
     await unlinkProperty(property);
     await FavoriteProperty.deleteMany({ propertyId: property._id });
 
-    return res.json({ message: "Property deleted successfully" });
+    let mediaCleanup = "not_required";
+    if (exclusiveAssets.length) {
+      const cleanupJob = await MediaCleanupJob.create({
+        propertyId: String(property._id),
+        propertyTitle: property.title,
+        assets: exclusiveAssets.map(({ publicId, resourceType }) => ({ publicId, resourceType })),
+      });
+      try {
+        await deleteCloudinaryAssets(exclusiveAssets);
+        cleanupJob.status = "completed";
+        cleanupJob.attempts = 1;
+        cleanupJob.completedAt = new Date();
+        await cleanupJob.save();
+        mediaCleanup = "completed";
+      } catch (cleanupError) {
+        cleanupJob.attempts = 1;
+        cleanupJob.lastError = String(cleanupError.message || cleanupError).slice(0, 1000);
+        await cleanupJob.save();
+        mediaCleanup = "pending";
+        console.error("Property media cleanup pending:", cleanupError);
+      }
+    }
+
+    return res.json({ message: "Property deleted successfully", mediaCleanup });
   } catch (error) {
     if (error.name === "CastError") {
       return res.status(404).json({ error: "Property not found" });
@@ -808,7 +915,7 @@ router.post(
   async (req, res) => {
     try {
       const normalizedBody = prepareSubmittedPropertyPayload(req.body);
-      const propertyData = {
+      const propertyData = withMediaLedger({
         ...(await convertPropertyMedia(normalizedBody)),
         published: false,
         verified: false,
@@ -817,7 +924,7 @@ router.post(
         submittedBy: "user",
         lastSubmittedAt: new Date(),
         postedDate: new Date().toISOString(),
-      };
+      });
 
       const property = await Property.create(propertyData);
 
@@ -836,7 +943,7 @@ router.post(
 router.post("/draft", auth, customerOnly, async (req, res) => {
   try {
     const normalizedBody = prepareOptionalPropertyPayload(req.body);
-    const property = await Property.create({
+    const property = await Property.create(withMediaLedger({
       ...(await convertPropertyMedia(normalizedBody)),
       published: false,
       verified: false,
@@ -844,7 +951,7 @@ router.post("/draft", auth, customerOnly, async (req, res) => {
       postedBy: req.user._id,
       submittedBy: "user",
       postedDate: new Date().toISOString(),
-    });
+    }));
     return res.status(201).json({ message: "Draft saved", property: presentProperty(property, { includeDocumentUrls: true }) });
   } catch (error) {
     if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });

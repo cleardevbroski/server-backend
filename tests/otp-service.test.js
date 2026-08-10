@@ -11,11 +11,13 @@ const { createAndSendOTP, sendOTP } = require("../src/services/otpService");
 describe("OTP delivery", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalApiKey = process.env.FAST2SMS_API_KEY;
+  const originalDevMode = process.env.OTP_DEV_MODE;
 
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NODE_ENV = "production";
     process.env.FAST2SMS_API_KEY = "test-key";
+    process.env.OTP_DEV_MODE = "false";
     Otp.create.mockResolvedValue({});
     Otp.deleteMany.mockResolvedValue({});
   });
@@ -23,6 +25,16 @@ describe("OTP delivery", () => {
   afterAll(() => {
     process.env.NODE_ENV = originalNodeEnv;
     process.env.FAST2SMS_API_KEY = originalApiKey;
+    process.env.OTP_DEV_MODE = originalDevMode;
+  });
+
+  it("returns the OTP and bypasses SMS when development mode is explicitly enabled", async () => {
+    process.env.OTP_DEV_MODE = "true";
+
+    const result = await sendOTP("9876543210", "123456");
+
+    expect(result).toEqual({ success: true, mode: "dev", devOtp: "123456" });
+    expect(axios.post).not.toHaveBeenCalled();
   });
 
   it("does not reveal an OTP when the SMS provider rejects the request", async () => {
@@ -32,6 +44,7 @@ describe("OTP delivery", () => {
 
     expect(result).toMatchObject({ success: false, statusCode: 503 });
     expect(result).not.toHaveProperty("otp");
+    expect(result).not.toHaveProperty("devOtp");
     expect(axios.post).toHaveBeenCalledWith(
       "https://www.fast2sms.com/dev/bulkV2",
       expect.objectContaining({ route: "otp", variables_values: "123456" }),

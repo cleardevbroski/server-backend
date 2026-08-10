@@ -9,35 +9,32 @@ function generateOTP() {
   return crypto.randomInt(100000, 1000000).toString();
 }
 
-function isProduction() {
-  return process.env.NODE_ENV === "production";
-}
-
-function canUseConsoleOtp() {
-  return !isProduction() && process.env.OTP_DEV_MODE === "true";
+function isDevOtpEnabled() {
+  return process.env.OTP_DEV_MODE === "true";
 }
 
 /**
- * Send an OTP through Fast2SMS. Local development can log the OTP to the
- * server console, but an OTP must never be returned to a browser.
+ * Send an OTP through Fast2SMS. When explicitly enabled, development mode
+ * bypasses the SMS provider and returns the code for the development UI.
  */
 async function sendOTP(phone, code) {
   const apiKey = process.env.FAST2SMS_API_KEY;
 
-  // Console OTPs require an explicit local-development opt-in. A deployed
-  // application must always be configured with a real SMS provider.
-  if (!apiKey) {
-    if (!canUseConsoleOtp()) {
-      console.error("OTP delivery is not configured: FAST2SMS_API_KEY is missing.");
-      return { success: false, error: "OTP delivery is not configured. Please contact support.", statusCode: 503 };
-    }
+  // The explicit switch takes priority over an API key so development and
+  // staging environments do not call (or depend on) the SMS provider.
+  if (isDevOtpEnabled()) {
     console.log("┌─────────────────────────────────────────┐");
     console.log("│  📱 DEV MODE — OTP NOT SENT VIA SMS     │");
     console.log(`│  Phone: ${phone}                        │`);
     console.log(`│  OTP:   ${code}                           │`);
-    console.log("│  (Set FAST2SMS_API_KEY in .env to send)  │");
+    console.log("│  (Set OTP_DEV_MODE=false to send SMS)    │");
     console.log("└─────────────────────────────────────────┘");
-    return { success: true, mode: "dev" };
+    return { success: true, mode: "dev", devOtp: code };
+  }
+
+  if (!apiKey) {
+    console.error("OTP delivery is not configured: FAST2SMS_API_KEY is missing.");
+    return { success: false, error: "OTP delivery is not configured. Please contact support.", statusCode: 503 };
   }
 
   // Fast2SMS's current API accepts OTP payloads as JSON with the key in an

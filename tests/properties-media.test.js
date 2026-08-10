@@ -10,6 +10,9 @@ jest.mock("cloudinary", () => ({
         })
       ),
     },
+    api: {
+      delete_resources: jest.fn().mockResolvedValue({ deleted: {} }),
+    },
   },
 }));
 
@@ -56,6 +59,74 @@ describe("Property media upload (Cloudinary)", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.property.image).toBe("https://res.cloudinary.com/demo/image/upload/mock.jpg");
+  });
+
+  it("preserves existing photos when a normal edit accidentally sends empty media arrays", async () => {
+    const { token } = await createAdminToken();
+    const hero = "https://res.cloudinary.com/demo/image/upload/clear-title/properties/hero-one.jpg";
+    const gallery = "https://res.cloudinary.com/demo/image/upload/clear-title/properties/gallery-one.jpg";
+    const property = await require("../src/models/Property").create({
+      title: "Protected photos",
+      price: "50 L",
+      heroImages: [hero],
+      images: [gallery],
+    });
+    expect(property.heroImages).toEqual([hero]);
+    expect(property.images).toEqual([gallery]);
+
+    const res = await request(app)
+      .put(`/api/properties/${property._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ price: "55 L", heroImages: [], images: [] });
+
+    expect(res.status).toBe(200);
+    expect(res.body.property.heroImages).toEqual([hero]);
+    expect(res.body.property.images).toEqual([gallery]);
+    const stored = await require("../src/models/Property").findById(property._id);
+    expect(stored.mediaAssets).toEqual(expect.arrayContaining([hero, gallery]));
+  });
+
+  it("updates workflow fields without touching project photos", async () => {
+    const { token } = await createAdminToken();
+    const hero = "https://res.cloudinary.com/demo/image/upload/clear-title/properties/workflow-hero.jpg";
+    const Property = require("../src/models/Property");
+    const property = await Property.create({ title: "Workflow", price: "50 L", heroImages: [hero] });
+
+    const res = await request(app)
+      .patch(`/api/properties/${property._id}/workflow`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ status: "approved", featured: true });
+
+    expect(res.status).toBe(200);
+    expect(res.body.property.heroImages).toEqual([hero]);
+    expect(res.body.property.featured).toBe(true);
+  });
+
+  it("deletes owned Cloudinary media only when the project is explicitly deleted", async () => {
+    const { token } = await createAdminToken();
+    const cloudinary = require("cloudinary").v2;
+    const Property = require("../src/models/Property");
+    const MediaCleanupJob = require("../src/models/MediaCleanupJob");
+    const photo = "https://res.cloudinary.com/demo/image/upload/v1/clear-title/properties/delete-with-project.jpg";
+    const property = await Property.create({
+      title: "Delete project media",
+      price: "50 L",
+      images: [photo],
+      mediaAssets: [photo],
+    });
+
+    const res = await request(app)
+      .delete(`/api/properties/${property._id}`)
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.mediaCleanup).toBe("completed");
+    expect(await Property.findById(property._id)).toBeNull();
+    expect(cloudinary.api.delete_resources).toHaveBeenCalledWith(
+      ["clear-title/properties/delete-with-project"],
+      expect.objectContaining({ resource_type: "image", invalidate: true })
+    );
+    expect(await MediaCleanupJob.findOne({ propertyId: String(property._id) })).toMatchObject({ status: "completed" });
   });
 
   it("rejects new property video and virtual-tour fields", async () => {
