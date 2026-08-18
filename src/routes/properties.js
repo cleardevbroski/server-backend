@@ -14,7 +14,7 @@ const {
   collectPropertyMediaAssets,
   deleteCloudinaryAssets,
 } = require("../utils/mediaUpload");
-const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, PropertyPayloadError } = require("../utils/propertyPayload");
+const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
 
 const router = express.Router();
 const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
@@ -197,6 +197,12 @@ function propertyPricePerSqft(property) {
 
 function prepareOptionalPropertyPayload(body) {
   const payload = compactPropertyPayload(withoutWorkflowFields(body)) || {};
+  if (Array.isArray(payload.reraPhases)) {
+    payload.reraPhases = payload.reraPhases.map((phase) => ({
+      ...phase,
+      reraSiteUrl: normalizeKarnatakaReraUrl(phase?.reraSiteUrl),
+    }));
+  }
   assertPropertyTypeIsSupported(payload.propertyType);
   return payload;
 }

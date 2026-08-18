@@ -80,31 +80,34 @@ async function sendChannelPartnerClientRegisteredEmail({ email, partnerName, lea
   return sendEmail({
     to: email,
     subject: `Client Registration Confirmed - ${leadNumber}`,
-    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Registered Successfully</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>Your client has been registered successfully. This registration is active for 90 days from the registration date.</p>${detailCard([["Lead reference", leadNumber], ["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], ["Registration date", formatDate(registeredAt)], ["Active until", formatDate(ownershipExpiresAt)]])}<p>Please quote the lead reference in future communication about this client.</p>${signature}`),
+    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Registered Successfully</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>Your client has been registered and is pending admin review. If it is not approved, the registration expires after 90 days.</p>${detailCard([["Lead reference", leadNumber], ["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], ["Registration date", formatDate(registeredAt)], ["Pending until", formatDate(ownershipExpiresAt)]])}<p>Please quote the lead reference in future communication about this client.</p>${signature}`),
   });
 }
 
-async function sendSamePartnerClientDuplicateEmail({ email, partnerName, leadNumber, clientName, mobileLast4, projectTitle, registeredAt, ownershipExpiresAt }) {
+async function sendSamePartnerClientDuplicateEmail({ email, partnerName, leadNumber, clientName, mobileLast4, projectTitle, registeredAt, ownershipExpiresAt, currentStatus }) {
+  const pending = currentStatus === "pending";
   return sendEmail({
     to: email,
     subject: "Alert: Client Already Registered",
-    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Already Registered</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>You tried to register this client again before the existing 90-day registration expired. No new lead was created and your original registration remains active.</p>${detailCard([["Lead reference", leadNumber], ["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], ["Originally registered", formatDate(registeredAt)], ["Active until", formatDate(ownershipExpiresAt)]])}<p>You may continue using the original lead reference. The client can be registered again only after the active period expires.</p>${signature}`),
+    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Already Registered</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>This client is already active under your account. No new lead was created and your original registration remains unchanged.</p>${detailCard([["Lead reference", leadNumber], ["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], ["Originally registered", formatDate(registeredAt)], [pending ? "Pending until" : "Current status", pending ? formatDate(ownershipExpiresAt) : currentStatus]])}<p>You may continue using the original lead reference.</p>${signature}`),
   });
 }
 
-async function sendClientClashAttemptEmail({ email, partnerName, clientName, mobileLast4, projectTitle, ownershipExpiresAt }) {
+async function sendClientClashAttemptEmail({ email, partnerName, clientName, mobileLast4, projectTitle, ownershipExpiresAt, currentStatus }) {
+  const pending = currentStatus === "pending";
   return sendEmail({
     to: email,
     subject: "Alert: Client Already Registered",
-    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Registration Clash</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>The client you submitted already has an active registration in our system through another Channel Partner.</p>${detailCard([["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], ["Current registration active until", formatDate(ownershipExpiresAt)]])}<p><strong>No new lead or ownership was created for this submission.</strong> The existing registration remains valid until the date shown above. Please contact the Channel Sales Team if you believe this is incorrect.</p>${signature}`),
+    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Registration Clash</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>The client you submitted already has an active registration in our system through another Channel Partner.</p>${detailCard([["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], [pending ? "Current registration pending until" : "Current registration status", pending ? formatDate(ownershipExpiresAt) : currentStatus]])}<p><strong>No new lead or ownership was created for this submission.</strong> Please contact the Channel Sales Team if you believe this is incorrect.</p>${signature}`),
   });
 }
 
-async function sendClientClashOwnerEmail({ email, partnerName, leadNumber, clientName, mobileLast4, projectTitle, ownershipExpiresAt }) {
+async function sendClientClashOwnerEmail({ email, partnerName, leadNumber, clientName, mobileLast4, projectTitle, ownershipExpiresAt, currentStatus }) {
+  const pending = currentStatus === "pending";
   return sendEmail({
     to: email,
     subject: "Alert: Another Channel Partner Attempted to Register Your Client",
-    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Re-registration Alert</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>Another Channel Partner attempted to register a client who is already active under your registration.</p>${detailCard([["Lead reference", leadNumber], ["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], ["Your registration is active until", formatDate(ownershipExpiresAt)]])}<p><strong>Your existing registration has not been changed.</strong> No details about either Channel Partner have been shared.</p>${signature}`),
+    html: emailShell(`<h1 style="font-size:22px;color:#121b35;margin:0 0 18px">Client Re-registration Alert</h1><p>Dear ${escapeHtml(partnerName || "Partner")},</p><p>Greetings from ClearTitle One!</p><p>Another Channel Partner attempted to register a client who is already active under your registration.</p>${detailCard([["Lead reference", leadNumber], ["Client name", clientName], ["Contact number", `••••••${mobileLast4}`], ["Project", projectTitle], [pending ? "Your registration is pending until" : "Your registration status", pending ? formatDate(ownershipExpiresAt) : currentStatus]])}<p><strong>Your existing registration has not been changed.</strong> No details about either Channel Partner have been shared.</p>${signature}`),
   });
 }
 

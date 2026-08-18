@@ -30,6 +30,7 @@ const RERA_DOCUMENTS = new Map([
   ["pan-card", ["PAN Card", "Annexure 2"]],
 ]);
 const KARNATAKA_RERA_URL = "https://rera.karnataka.gov.in/viewAllProjects";
+const KARNATAKA_RERA_HOSTS = new Set(["rera.karnataka.gov.in", "www.rera.karnataka.gov.in"]);
 const PROJECT_DOCUMENTS = new Map([
   ["commencement-certificate", ["Commencement Certificate", "Annexure 80"]],
   ["approved-building-plan", ["Approved Building Plan", "Annexure 81"]],
@@ -46,6 +47,18 @@ class PropertyPayloadError extends Error {
   constructor(message) {
     super(message);
     this.name = "PropertyPayloadError";
+  }
+}
+
+function normalizeKarnatakaReraUrl(value) {
+  const candidate = String(value || "").trim();
+  if (!candidate) return KARNATAKA_RERA_URL;
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== "https:" || !KARNATAKA_RERA_HOSTS.has(url.hostname.toLowerCase())) throw new Error("invalid host");
+    return url.toString();
+  } catch {
+    throw new PropertyPayloadError("RERA website must be an HTTPS URL on rera.karnataka.gov.in");
   }
 }
 
@@ -360,7 +373,7 @@ function normalizeReraPhases(phases, legacyNumber, propertyLabel) {
       ...(phase._id ? { _id: phase._id } : {}),
       name,
       reraNumber,
-      reraSiteUrl: KARNATAKA_RERA_URL,
+      reraSiteUrl: normalizeKarnatakaReraUrl(phase.reraSiteUrl),
       order: index,
       reraDocuments: normalizeReraDocuments(phase.reraDocuments, RERA_DOCUMENTS, "RERA"),
       projectDocuments: normalizeReraDocuments(phase.projectDocuments, PROJECT_DOCUMENTS, "Project"),
@@ -465,10 +478,14 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
     const totalAcres = optionalPositiveNumber(projectArea.totalAcres, "Total project area");
     const openSpaceAcres = optionalPositiveNumber(projectArea.openSpaceAcres, "Open space area");
     const builtUpAcres = optionalPositiveNumber(projectArea.builtUpAcres, "Apartment built-up area");
-    if ([totalAcres, openSpaceAcres, builtUpAcres].every((value) => value !== undefined) && Math.abs(totalAcres - openSpaceAcres - builtUpAcres) > 0.001) {
+    const amenitiesAcres = optionalPositiveNumber(projectArea.amenitiesAcres, "Amenities area");
+    if (amenitiesAcres !== undefined && [totalAcres, openSpaceAcres, builtUpAcres].every((value) => value !== undefined) && Math.abs(totalAcres - openSpaceAcres - builtUpAcres - amenitiesAcres) > 0.001) {
+      throw new PropertyPayloadError("Building, empty/open space and amenities area must equal the total project area");
+    }
+    if (amenitiesAcres === undefined && [totalAcres, openSpaceAcres, builtUpAcres].every((value) => value !== undefined) && Math.abs(totalAcres - openSpaceAcres - builtUpAcres) > 0.001) {
       throw new PropertyPayloadError("Open space and apartment built-up area must equal the total project area");
     }
-    payload.projectArea = { totalAcres, openSpaceAcres, builtUpAcres };
+    payload.projectArea = { totalAcres, openSpaceAcres, builtUpAcres, amenitiesAcres };
   } else {
     payload.projectArea = undefined;
   }
@@ -879,6 +896,7 @@ function normalizePgPayload(input, { requireStructured = false } = {}) {
 module.exports = {
   FACING_OPTIONS,
   PropertyPayloadError,
+  normalizeKarnatakaReraUrl,
   normalizeConfiguration,
   normalizeApartmentPayload,
   normalizeVillaPayload,

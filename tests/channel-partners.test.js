@@ -2,6 +2,7 @@ const request = require("supertest");
 const app = require("../src/app");
 const ChannelPartner = require("../src/models/ChannelPartner");
 const ChannelPartnerClient = require("../src/models/ChannelPartnerClient");
+const ChannelPartnerClientClash = require("../src/models/ChannelPartnerClientClash");
 const Property = require("../src/models/Property");
 const { createAdminToken, createUserToken } = require("./helpers");
 
@@ -257,13 +258,49 @@ describe("Channel partners API", () => {
     const duplicate = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${secondSession.body.token}`).send(payload);
     expect(duplicate.status).toBe(409);
     expect(JSON.stringify(duplicate.body)).not.toContain("Northstar");
-    expect(await ChannelPartnerClient.countDocuments({ status: "registered" })).toBe(1);
+    expect(await ChannelPartnerClient.countDocuments({ status: "pending" })).toBe(1);
+    expect(await ChannelPartnerClientClash.countDocuments()).toBe(1);
 
-    const client = await ChannelPartnerClient.findOne({ status: "registered" });
+    const client = await ChannelPartnerClient.findOne({ status: "pending" });
     const admin = await createAdminToken();
     const adminList = await request(app).get("/api/channel-partner-leads/admin/clients").set("Authorization", `Bearer ${admin.token}`);
     expect(adminList.status).toBe(200);
     expect(adminList.body.clients[0].channelPartner.name).toBe("Northstar Realty");
+
+    const approved = await request(app)
+      .patch(`/api/channel-partner-leads/admin/clients/${client._id}/status`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ status: "approved", bookingAdvanceAmountPaise: 20_000_000, note: "Booking confirmed" });
+    expect(approved.status).toBe(200);
+    expect(approved.body.client.initialCpAmountPaise).toBe(4_000_000);
+    expect(new Date(approved.body.client.initialCreditAt).getTime() - new Date(approved.body.client.approvedAt).getTime()).toBe(12 * 60 * 60 * 1000);
+
+    const dashboard = await request(app).get("/api/channel-partner-leads/mine/dashboard").set("Authorization", `Bearer ${firstSession.body.token}`);
+    expect(dashboard.status).toBe(200);
+    expect(dashboard.body.counts).toMatchObject({ total: 1, approved: 1, clashes: 1 });
+    expect(dashboard.body.earnings.awaitingInitialPaise).toBe(4_000_000);
+
+    const successful = await request(app)
+      .patch(`/api/channel-partner-leads/admin/clients/${client._id}/status`)
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({ status: "successful", finalSettlementCpAmountPaise: 1_500_000, note: "Full settlement received" });
+    expect(successful.status).toBe(200);
+    expect(successful.body.client.status).toBe("successful");
+    expect(successful.body.client.finalSettlementCpAmountPaise).toBe(1_500_000);
+
+    await ChannelPartnerClient.updateOne(
+      { _id: client._id },
+      { $set: { ownershipExpiresAt: new Date(Date.now() - 1000), initialCreditAt: new Date(Date.now() - 1000) } },
+    );
+    const creditedDashboard = await request(app).get("/api/channel-partner-leads/mine/dashboard").set("Authorization", `Bearer ${firstSession.body.token}`);
+    expect(creditedDashboard.body.counts).toMatchObject({ successful: 1, expired: 0 });
+    expect(creditedDashboard.body.earnings).toMatchObject({ creditedInitialPaise: 4_000_000, finalSettlementCreditedPaise: 1_500_000, totalCreditedPaise: 5_500_000 });
+    expect(await ChannelPartnerClient.countDocuments({ status: "successful", claimActive: true })).toBe(1);
+
+    const adminDashboard = await request(app).get(`/api/channel-partner-leads/admin/partners/${client.partnerId}/dashboard`).set("Authorization", `Bearer ${admin.token}`);
+    expect(adminDashboard.status).toBe(200);
+    expect(adminDashboard.body.counts.clashes).toBe(1);
+    expect(adminDashboard.body.recentClashes).toHaveLength(1);
 
     const resent = await request(app)
       .post(`/api/channel-partner-leads/admin/clients/${client._id}/resend-email`)
@@ -281,7 +318,7 @@ describe("Channel partners API", () => {
     expect(sentEmails.filter((email) => email.to[0] === "asha@example.com")).toHaveLength(4);
     expect(sentEmails.filter((email) => email.to[0] === "second@example.com")).toHaveLength(1);
     const samePartnerEmail = sentEmails.find((email) => email.subject === "Alert: Client Already Registered" && email.to[0] === "asha@example.com");
-    expect(samePartnerEmail.html).toContain("before the existing 90-day registration expired");
+    expect(samePartnerEmail.html).toContain("already active under your account");
     const attemptingPartnerEmail = sentEmails.find((email) => email.to[0] === "second@example.com");
     expect(attemptingPartnerEmail.html).toContain("No new lead or ownership was created");
     expect(attemptingPartnerEmail.html).not.toContain("Northstar Realty");
@@ -307,6 +344,35 @@ describe("Channel partners API", () => {
     const reclaimed = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${secondSession.body.token}`).send(payload);
     expect(reclaimed.status).toBe(201);
     expect(await ChannelPartnerClient.countDocuments({ status: "expired" })).toBe(1);
-    expect(await ChannelPartnerClient.countDocuments({ status: "registered" })).toBe(1);
+    expect(await ChannelPartnerClient.countDocuments({ status: "pending" })).toBe(1);
+  });
+
+  it("requires controlled transitions and releases ownership when a pending client is rejected", async () => {
+    const firstPartner = await request(app).post("/api/channel-partners").send(validApplication());
+    const secondInput = validApplication();
+    secondInput.company.panNumber = "QRSTU3456V";
+    secondInput.company.name = "Harbor Realty";
+    secondInput.contact.email = "harbor@example.com";
+    secondInput.contact.mobile = "9876543213";
+    const secondPartner = await request(app).post("/api/channel-partners").send(secondInput);
+    const project = await Property.create({ title: "ClearTitle Grove", published: true, status: "approved" });
+    const firstSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: firstPartner.body.application.partnerCode });
+    const secondSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: secondPartner.body.application.partnerCode });
+    const payload = { clientName: "Nandita Iyer", mobile: "9986465934", projectId: project._id.toString(), consentAccepted: true };
+    await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${firstSession.body.token}`).send(payload);
+    const client = await ChannelPartnerClient.findOne({ status: "pending" });
+    const admin = await createAdminToken();
+
+    const missingAmount = await request(app).patch(`/api/channel-partner-leads/admin/clients/${client._id}/status`).set("Authorization", `Bearer ${admin.token}`).send({ status: "approved" });
+    expect(missingAmount.status).toBe(400);
+    const missingReason = await request(app).patch(`/api/channel-partner-leads/admin/clients/${client._id}/status`).set("Authorization", `Bearer ${admin.token}`).send({ status: "rejected" });
+    expect(missingReason.status).toBe(400);
+    const rejected = await request(app).patch(`/api/channel-partner-leads/admin/clients/${client._id}/status`).set("Authorization", `Bearer ${admin.token}`).send({ status: "rejected", reason: "Not eligible" });
+    expect(rejected.status).toBe(200);
+    expect(rejected.body.client.claimActive).toBe(false);
+
+    const reclaimed = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${secondSession.body.token}`).send(payload);
+    expect(reclaimed.status).toBe(201);
+    expect(await ChannelPartnerClient.countDocuments({ claimActive: true })).toBe(1);
   });
 });

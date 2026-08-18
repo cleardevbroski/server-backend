@@ -209,6 +209,7 @@ const projectAreaSchema = new mongoose.Schema(
     totalAcres: { type: Number, min: 0 },
     openSpaceAcres: { type: Number, min: 0 },
     builtUpAcres: { type: Number, min: 0 },
+    amenitiesAcres: { type: Number, min: 0 },
   },
   { _id: false }
 );

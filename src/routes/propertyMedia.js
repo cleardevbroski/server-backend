@@ -25,6 +25,13 @@ const KINDS = {
     folder: "clear-title/properties/project-downloads",
     requiresAuth: true,
   },
+  "project-document-image": {
+    mime: new Set(["image/jpeg", "image/png"]),
+    maxBytes: 15 * 1024 * 1024,
+    resourceType: "image",
+    folder: "clear-title/properties/project-downloads",
+    requiresAuth: true,
+  },
   "project-walkthrough": {
     mime: new Set(["video/mp4"]),
     maxBytes: 15 * 1024 * 1024,

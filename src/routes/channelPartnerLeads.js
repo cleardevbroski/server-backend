@@ -5,6 +5,7 @@ const mongoose = require("mongoose");
 const rateLimit = require("express-rate-limit");
 const ChannelPartner = require("../models/ChannelPartner");
 const ChannelPartnerClient = require("../models/ChannelPartnerClient");
+const ChannelPartnerClientClash = require("../models/ChannelPartnerClientClash");
 const ChannelPartnerCounter = require("../models/ChannelPartnerCounter");
 const Property = require("../models/Property");
 const auth = require("../middleware/auth");
@@ -32,6 +33,8 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE = /^[6-9][0-9]{9}$/;
 const ACTIVE_STATUSES = new Set(["active", "approved"]);
 const CLIENT_OWNERSHIP_MS = 90 * 24 * 60 * 60 * 1000;
+const INITIAL_CREDIT_DELAY_MS = 12 * 60 * 60 * 1000;
+const CLIENT_STATUSES = ["pending", "approved", "successful", "rejected", "expired"];
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 async function nextLeadNumber() {
@@ -79,6 +82,15 @@ function clientRecord(client) {
     status: client.status,
     registeredAt: client.registeredAt,
     ownershipExpiresAt: client.ownershipExpiresAt,
+    claimActive: Boolean(client.claimActive),
+    bookingAdvanceAmountPaise: client.bookingAdvanceAmountPaise || 0,
+    initialCpRatePercent: client.initialCpRatePercent ?? 20,
+    initialCpAmountPaise: client.initialCpAmountPaise || 0,
+    approvedAt: client.approvedAt || null,
+    initialCreditAt: client.initialCreditAt || null,
+    initialCreditState: client.initialCreditAt ? (new Date(client.initialCreditAt) <= new Date() ? "credited" : "awaiting") : "not_available",
+    finalSettlementCpAmountPaise: client.finalSettlementCpAmountPaise || 0,
+    successfulAt: client.successfulAt || null,
   };
 }
 
@@ -99,6 +111,16 @@ function adminClientRecord(client) {
     status: client.status,
     registeredAt: client.registeredAt,
     ownershipExpiresAt: client.ownershipExpiresAt,
+    claimActive: Boolean(client.claimActive),
+    bookingAdvanceAmountPaise: client.bookingAdvanceAmountPaise || 0,
+    initialCpRatePercent: client.initialCpRatePercent ?? 20,
+    initialCpAmountPaise: client.initialCpAmountPaise || 0,
+    approvedAt: client.approvedAt || null,
+    initialCreditAt: client.initialCreditAt || null,
+    initialCreditState: client.initialCreditAt ? (new Date(client.initialCreditAt) <= new Date() ? "credited" : "awaiting") : "not_available",
+    finalSettlementCpAmountPaise: client.finalSettlementCpAmountPaise || 0,
+    successfulAt: client.successfulAt || null,
+    statusHistory: client.statusHistory || [],
     channelPartner: {
       id: partner._id?.toString() || "",
       name: partner.company?.name || "Channel Partner removed",
@@ -111,12 +133,63 @@ function adminClientRecord(client) {
   };
 }
 
+function emptyCounts() {
+  return { total: 0, pending: 0, approved: 0, successful: 0, rejected: 0, expired: 0, clashes: 0 };
+}
+
+function summarizeClients(clients, clashCount = 0, now = new Date()) {
+  const counts = emptyCounts();
+  counts.total = clients.length;
+  clients.forEach((client) => { if (Object.hasOwn(counts, client.status)) counts[client.status] += 1; });
+  counts.clashes = clashCount;
+  let creditedInitialPaise = 0;
+  let awaitingInitialPaise = 0;
+  let finalSettlementCreditedPaise = 0;
+  let nearestInitialCreditAt = null;
+  clients.forEach((client) => {
+    if (client.initialCreditAt && client.initialCpAmountPaise > 0) {
+      const creditAt = new Date(client.initialCreditAt);
+      if (creditAt <= now) creditedInitialPaise += client.initialCpAmountPaise;
+      else {
+        awaitingInitialPaise += client.initialCpAmountPaise;
+        if (!nearestInitialCreditAt || creditAt < nearestInitialCreditAt) nearestInitialCreditAt = creditAt;
+      }
+    }
+    if (client.status === "successful") finalSettlementCreditedPaise += client.finalSettlementCpAmountPaise || 0;
+  });
+  return {
+    counts,
+    earnings: {
+      creditedInitialPaise,
+      awaitingInitialPaise,
+      finalSettlementCreditedPaise,
+      totalCreditedPaise: creditedInitialPaise + finalSettlementCreditedPaise,
+      nearestInitialCreditAt,
+    },
+  };
+}
+
+function clashRecord(clash, partnerId) {
+  const initiated = clash.attemptingPartnerId.toString() === partnerId.toString();
+  return {
+    id: clash._id.toString(),
+    direction: initiated ? "initiated" : "received",
+    clientName: clash.clientName,
+    mobileMasked: `••••••${clash.mobileLast4}`,
+    projectId: clash.projectId?.toString(),
+    projectTitle: clash.projectTitle,
+    attemptedAt: clash.attemptedAt,
+    outcome: clash.outcome,
+  };
+}
+
 function duplicateEmailDetails(existing) {
   return {
     clientName: existing.clientName,
     mobileLast4: existing.mobileLast4,
     projectTitle: existing.projectTitle,
     ownershipExpiresAt: existing.ownershipExpiresAt,
+    currentStatus: existing.status,
   };
 }
 
@@ -162,10 +235,25 @@ async function safelyNotifyActiveDuplicate(details) {
   }
 }
 
-async function respondToActiveDuplicate(res, existing, attemptingPartner) {
+async function respondToActiveDuplicate(res, existing, attemptingPartner, attempt = {}) {
   await safelyNotifyActiveDuplicate({ existing, attemptingPartner });
   if (existing.partnerId.equals(attemptingPartner._id)) {
     return res.status(200).json({ message: "This client is already in your active client list. Your original registration remains active.", existing: true, client: clientRecord(existing) });
+  }
+  try {
+    await ChannelPartnerClientClash.create({
+      attemptingPartnerId: attemptingPartner._id,
+      owningPartnerId: existing.partnerId,
+      owningClientId: existing._id,
+      mobileHash: attempt.mobileHash,
+      mobileLast4: attempt.mobileLast4 || existing.mobileLast4,
+      clientName: attempt.clientName || existing.clientName,
+      projectId: attempt.projectId || existing.projectId,
+      projectTitle: attempt.projectTitle || existing.projectTitle,
+      attemptedAt: new Date(),
+    });
+  } catch (clashError) {
+    console.error("Channel partner clash audit failed:", clashError.message);
   }
   return res.status(409).json({ error: "This client already has an active registration. No new registration was created.", activeUntil: existing.ownershipExpiresAt });
 }
@@ -183,6 +271,7 @@ router.post("/session", codeLimiter, async (req, res) => {
         name: partner.company.name,
         type: partner.partnerType,
         code: partnerCode,
+        codeLast4: partner.partnerCodeLast4,
         contactName: partner.contact.name,
         mobile: partner.contact.mobile,
         email: partner.contact.email,
@@ -215,11 +304,74 @@ router.get("/mine", partnerSession, async (req, res) => {
   try {
     const now = new Date();
     await expireChannelPartnerClients(now);
-    const clients = await ChannelPartnerClient.find({ partnerId: req.channelPartner._id, status: "registered", ownershipExpiresAt: { $gt: now } }).sort({ registeredAt: -1 }).lean();
+    const clients = await ChannelPartnerClient.find({ partnerId: req.channelPartner._id, claimActive: true }).sort({ registeredAt: -1 }).lean();
     return res.json({ clients: clients.map(clientRecord) });
   } catch (error) {
     console.error("Channel partner own clients error:", error);
     return res.status(500).json({ error: "Unable to load registered clients." });
+  }
+});
+
+router.get("/mine/dashboard", partnerSession, async (req, res) => {
+  try {
+    const now = new Date();
+    await expireChannelPartnerClients(now);
+    const partnerId = req.channelPartner._id;
+    const [clients, clashes, clashCount] = await Promise.all([
+      ChannelPartnerClient.find({ partnerId }).sort({ registeredAt: -1 }).lean(),
+      ChannelPartnerClientClash.find({ $or: [{ attemptingPartnerId: partnerId }, { owningPartnerId: partnerId }] }).sort({ attemptedAt: -1 }).limit(20).lean(),
+      ChannelPartnerClientClash.countDocuments({ $or: [{ attemptingPartnerId: partnerId }, { owningPartnerId: partnerId }] }),
+    ]);
+    return res.json({
+      partner: {
+        name: req.channelPartner.company?.name || "Channel Partner",
+        contactName: req.channelPartner.contact?.name || "",
+        codeLast4: req.channelPartner.partnerCodeLast4 || "",
+      },
+      ...summarizeClients(clients, clashCount, now),
+      recentClients: clients.slice(0, 5).map(clientRecord),
+      recentClashes: clashes.map((clash) => clashRecord(clash, partnerId)),
+      serverNow: now,
+    });
+  } catch (error) {
+    console.error("Channel partner dashboard error:", error);
+    return res.status(500).json({ error: "Unable to load Channel Partner dashboard." });
+  }
+});
+
+router.get("/mine/clients", partnerSession, async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const status = clean(req.query.status, 20);
+    await expireChannelPartnerClients(new Date());
+    const filter = { partnerId: req.channelPartner._id };
+    if (CLIENT_STATUSES.includes(status)) filter.status = status;
+    const [clients, total] = await Promise.all([
+      ChannelPartnerClient.find(filter).sort({ registeredAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ChannelPartnerClient.countDocuments(filter),
+    ]);
+    return res.json({ clients: clients.map(clientRecord), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
+  } catch (error) {
+    console.error("Channel partner client history error:", error);
+    return res.status(500).json({ error: "Unable to load client history." });
+  }
+});
+
+router.get("/mine/clashes", partnerSession, async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+    const partnerId = req.channelPartner._id;
+    const filter = { $or: [{ attemptingPartnerId: partnerId }, { owningPartnerId: partnerId }] };
+    const [clashes, total] = await Promise.all([
+      ChannelPartnerClientClash.find(filter).sort({ attemptedAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      ChannelPartnerClientClash.countDocuments(filter),
+    ]);
+    return res.json({ clashes: clashes.map((clash) => clashRecord(clash, partnerId)), pagination: { page, limit, total, pages: Math.max(1, Math.ceil(total / limit)) } });
+  } catch (error) {
+    console.error("Channel partner clash history error:", error);
+    return res.status(500).json({ error: "Unable to load clash history." });
   }
 });
 
@@ -252,11 +404,15 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
     const now = new Date();
     const mobileHash = hashLookup(mobile, "partner-client-mobile");
     await ChannelPartnerClient.updateMany(
-      { mobileHash, status: "registered", ownershipExpiresAt: { $lte: now } },
-      { $set: { status: "expired" } },
+      { mobileHash, status: "pending", claimActive: true, ownershipExpiresAt: { $lte: now } },
+      {
+        $set: { status: "expired", claimActive: false },
+        $push: { statusHistory: { fromStatus: "pending", toStatus: "expired", reason: "Automatic 90-day expiry", actorLabel: "system", createdAt: now } },
+      },
     );
-    const existing = await ChannelPartnerClient.findOne({ mobileHash, status: "registered", ownershipExpiresAt: { $gt: now } });
-    if (existing) return respondToActiveDuplicate(res, existing, req.channelPartner);
+    const existing = await ChannelPartnerClient.findOne({ mobileHash, claimActive: true });
+    const attemptDetails = { mobileHash, mobileLast4: mobile.slice(-4), clientName, projectId: project._id, projectTitle: project.title };
+    if (existing) return respondToActiveDuplicate(res, existing, req.channelPartner, attemptDetails);
 
     const registeredAt = now;
     const ownershipExpiresAt = new Date(now.getTime() + CLIENT_OWNERSHIP_MS);
@@ -277,15 +433,17 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
         budget,
         notes,
         consentAcceptedAt: now,
-        status: "registered",
+        status: "pending",
+        claimActive: true,
         registeredAt,
         ownershipExpiresAt,
+        statusHistory: [{ fromStatus: "", toStatus: "pending", reason: "Client registered by Channel Partner", actorLabel: "channel_partner", createdAt: now }],
         ...(idempotencyHash ? { idempotencyHash } : {}),
       });
     } catch (error) {
       if (error.code === 11000) {
-        const concurrentExisting = await ChannelPartnerClient.findOne({ mobileHash, status: "registered", ownershipExpiresAt: { $gt: now } });
-        if (concurrentExisting) return respondToActiveDuplicate(res, concurrentExisting, req.channelPartner);
+        const concurrentExisting = await ChannelPartnerClient.findOne({ mobileHash, claimActive: true });
+        if (concurrentExisting) return respondToActiveDuplicate(res, concurrentExisting, req.channelPartner, attemptDetails);
         return res.status(409).json({ error: "This client already has an active registration. No new registration was created." });
       }
       throw error;
@@ -315,18 +473,74 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
   }
 });
 
-router.get("/admin/partners/:partnerId", auth, adminOnly, async (req, res) => {
+router.get(["/admin/partners/:partnerId", "/admin/partners/:partnerId/dashboard"], auth, adminOnly, async (req, res) => {
   try {
     if (!mongoose.isValidObjectId(req.params.partnerId)) return res.status(404).json({ error: "Channel Partner not found." });
     await expireChannelPartnerClients(new Date());
-    const clients = await ChannelPartnerClient.find({ partnerId: req.params.partnerId }).sort({ registeredAt: -1 }).lean();
+    const partnerId = new mongoose.Types.ObjectId(req.params.partnerId);
+    const [clients, clashes, clashCount] = await Promise.all([
+      ChannelPartnerClient.find({ partnerId }).sort({ registeredAt: -1 }).lean(),
+      ChannelPartnerClientClash.find({ $or: [{ attemptingPartnerId: partnerId }, { owningPartnerId: partnerId }] }).sort({ attemptedAt: -1 }).limit(20).lean(),
+      ChannelPartnerClientClash.countDocuments({ $or: [{ attemptingPartnerId: partnerId }, { owningPartnerId: partnerId }] }),
+    ]);
     return res.json({
-      active: clients.filter((client) => client.status === "registered" && client.ownershipExpiresAt > new Date()).map(clientRecord),
-      history: clients.filter((client) => client.status !== "registered" || client.ownershipExpiresAt <= new Date()).map(clientRecord),
+      active: clients.filter((client) => client.claimActive).map(clientRecord),
+      history: clients.filter((client) => !client.claimActive).map(clientRecord),
+      ...summarizeClients(clients, clashCount),
+      recentClashes: clashes.map((clash) => clashRecord(clash, partnerId)),
     });
   } catch (error) {
     console.error("Admin channel partner clients error:", error);
     return res.status(500).json({ error: "Unable to load Channel Partner clients." });
+  }
+});
+
+router.patch("/admin/clients/:id/status", auth, adminOnly, async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: "CP client not found." });
+    const client = await ChannelPartnerClient.findById(req.params.id);
+    if (!client) return res.status(404).json({ error: "CP client not found." });
+
+    const nextStatus = clean(req.body?.status, 20);
+    const reason = clean(req.body?.reason || req.body?.note, 1000);
+    const now = new Date();
+    const actorLabel = clean(req.user?.name || req.user?.email || req.user?.phone || "admin", 120);
+    const history = { fromStatus: client.status, toStatus: nextStatus, reason, actorId: req.user._id, actorLabel, createdAt: now };
+
+    if (client.status === "pending" && nextStatus === "approved") {
+      const bookingAdvanceAmountPaise = Number(req.body?.bookingAdvanceAmountPaise);
+      if (!Number.isSafeInteger(bookingAdvanceAmountPaise) || bookingAdvanceAmountPaise <= 0) {
+        return res.status(400).json({ error: "Enter a valid booking advance amount." });
+      }
+      client.status = "approved";
+      client.bookingAdvanceAmountPaise = bookingAdvanceAmountPaise;
+      client.initialCpRatePercent = 20;
+      client.initialCpAmountPaise = Math.round(bookingAdvanceAmountPaise * 0.2);
+      client.approvedAt = now;
+      client.initialCreditAt = new Date(now.getTime() + INITIAL_CREDIT_DELAY_MS);
+    } else if (client.status === "pending" && nextStatus === "rejected") {
+      if (!reason) return res.status(400).json({ error: "A rejection reason is required." });
+      client.status = "rejected";
+      client.claimActive = false;
+    } else if (client.status === "approved" && nextStatus === "successful") {
+      const finalSettlementCpAmountPaise = Number(req.body?.finalSettlementCpAmountPaise);
+      if (!Number.isSafeInteger(finalSettlementCpAmountPaise) || finalSettlementCpAmountPaise <= 0) {
+        return res.status(400).json({ error: "Enter a valid final-settlement CP amount." });
+      }
+      client.status = "successful";
+      client.finalSettlementCpAmountPaise = finalSettlementCpAmountPaise;
+      client.successfulAt = now;
+    } else {
+      return res.status(409).json({ error: `Cannot change a ${client.status} client to ${nextStatus || "that status"}.` });
+    }
+
+    client.statusHistory.push(history);
+    await client.save();
+    await client.populate("partnerId", "applicationNumber partnerCodeLast4 company.name contact.name contact.mobile contact.email");
+    return res.json({ message: `Client status changed to ${nextStatus}.`, client: adminClientRecord(client) });
+  } catch (error) {
+    console.error("Admin CP client status error:", error);
+    return res.status(500).json({ error: "Unable to update CP client status." });
   }
 });
 
@@ -339,7 +553,7 @@ router.get("/admin/clients", auth, adminOnly, async (req, res) => {
     const now = new Date();
     await expireChannelPartnerClients(now);
     const filter = {};
-    if (["registered", "expired", "cancelled", "converted"].includes(status)) filter.status = status;
+    if (CLIENT_STATUSES.includes(status)) filter.status = status;
     if (searchText) {
       const search = new RegExp(escapeRegex(searchText), "i");
       const partners = await ChannelPartner.find({ $or: [{ "company.name": search }, { "contact.name": search }, { applicationNumber: search }] }).select("_id").lean();
@@ -372,7 +586,7 @@ router.post("/admin/clients/:id/resend-email", auth, adminOnly, async (req, res)
     const client = await ChannelPartnerClient.findById(req.params.id).populate("partnerId", "company.name contact.email");
     if (!client) return res.status(404).json({ error: "CP client not found." });
     if (!client.partnerId?.contact?.email) return res.status(409).json({ error: "The Channel Partner email address is unavailable." });
-    if (client.status !== "registered" || client.ownershipExpiresAt <= new Date()) return res.status(409).json({ error: "Only an active client registration email can be resent." });
+    if (!client.claimActive) return res.status(409).json({ error: "Only an active client registration email can be resent." });
     const result = await sendChannelPartnerClientRegisteredEmail({
       email: client.partnerId.contact.email,
       partnerName: client.partnerId.company?.name,

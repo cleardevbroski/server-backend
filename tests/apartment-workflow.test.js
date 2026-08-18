@@ -220,6 +220,23 @@ describe("Apartment property workflow", () => {
     expect(area.body.error).toMatch(/must equal the total project area/i);
   });
 
+  it("stores a valid explicit amenities-area split and rejects an inaccurate one", async () => {
+    const { token } = await createAdminToken();
+    const valid = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(apartment({ projectArea: { totalAcres: 5, openSpaceAcres: 2, builtUpAcres: 2, amenitiesAcres: 1 } }));
+    expect(valid.status).toBe(201);
+    expect(valid.body.property.projectArea).toMatchObject({ totalAcres: 5, openSpaceAcres: 2, builtUpAcres: 2, amenitiesAcres: 1 });
+
+    const invalid = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(apartment({ projectArea: { totalAcres: 5, openSpaceAcres: 2, builtUpAcres: 2, amenitiesAcres: 2 } }));
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toMatch(/amenities area must equal the total project area/i);
+  });
+
   it("matches a nested bedroom configuration in the public list", async () => {
     await Property.create(apartment({ status: "approved" }));
     const res = await request(app).get("/api/properties?bedrooms=3");

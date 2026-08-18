@@ -64,6 +64,38 @@ describe("RERA document security and removed property fields", () => {
     expect(incomplete.body.error).toMatch(/name and email/i);
   });
 
+  it("preserves safe phase-specific Karnataka RERA links and rejects external domains", async () => {
+    const { token } = await createAdminToken();
+    const safeUrl = "https://rera.karnataka.gov.in/project/phase-one";
+    const valid = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        title: "Safe RERA link project",
+        price: "1",
+        reraRegistered: true,
+        reraNumber: "PRM/KA/RERA/SAFE1234",
+        reraPhases: [{ name: "Phase 1", reraNumber: "PRM/KA/RERA/SAFE1234", reraSiteUrl: safeUrl, reraDocuments: [], projectDocuments: [] }],
+      });
+
+    expect(valid.status).toBe(201);
+    expect(valid.body.property.reraPhases[0].reraSiteUrl).toBe(safeUrl);
+
+    const invalid = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        title: "Unsafe RERA link project",
+        price: "1",
+        reraRegistered: true,
+        reraNumber: "PRM/KA/RERA/SAFE5678",
+        reraPhases: [{ name: "Phase 1", reraNumber: "PRM/KA/RERA/SAFE5678", reraSiteUrl: "https://example.com/fake-rera", reraDocuments: [], projectDocuments: [] }],
+      });
+
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toMatch(/rera\.karnataka\.gov\.in/i);
+  });
+
   it("strips maintenance charges and dealer linkage from writes", async () => {
     const { token } = await createAdminToken();
     const response = await request(app)
