@@ -18,14 +18,7 @@ async function start() {
     console.log("║   🏠 ClearTitle Backend API                  ║");
     console.log(`║   🚀 Server running on port ${PORT}              ║`);
     console.log(`║   📡 API: http://localhost:${PORT}/api           ║`);
-    console.log("║                                              ║");
-    if (!process.env.FAST2SMS_API_KEY && process.env.NODE_ENV !== "production" && process.env.OTP_DEV_MODE === "true") {
-      console.log("║   ⚠️  OTP Dev Mode: ON (console logging)     ║");
-    } else {
-      console.log(process.env.FAST2SMS_API_KEY
-        ? "║   ✅ OTP Provider: Fast2SMS                  ║"
-        : "║   ⚠️  OTP provider is not configured          ║");
-    }
+    console.log("║   Property access: email verification        ║");
     console.log("╚══════════════════════════════════════════════╝");
     console.log("");
   });

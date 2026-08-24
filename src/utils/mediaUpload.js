@@ -50,16 +50,18 @@ async function deleteCloudinaryAssets(assets) {
   for (const candidate of assets || []) {
     const asset = candidate.publicId ? candidate : cloudinaryAssetFromUrl(candidate.url || candidate);
     if (!asset) continue;
-    const key = asset.resourceType;
+    const deliveryType = asset.deliveryType || "upload";
+    const key = `${asset.resourceType}:${deliveryType}`;
     if (!groups.has(key)) groups.set(key, new Set());
     groups.get(key).add(asset.publicId);
   }
-  for (const [resourceType, ids] of groups) {
+  for (const [key, ids] of groups) {
+    const [resourceType, deliveryType] = key.split(":");
     const list = [...ids];
     for (let index = 0; index < list.length; index += 100) {
       await cloudinary.api.delete_resources(list.slice(index, index + 100), {
         resource_type: resourceType,
-        type: "upload",
+        type: deliveryType,
         invalidate: true,
       });
     }
@@ -86,7 +88,7 @@ function hasValidSignature(buffer, mime) {
   return false;
 }
 
-function uploadRequestStream(request, { resourceType, folder, maxBytes, mime }) {
+function uploadRequestStream(request, { resourceType, folder, maxBytes, mime, uploadOptions = {}, returnAsset = false }) {
   return new Promise((resolve, reject) => {
     let bytes = 0;
     let prefix = Buffer.alloc(0);
@@ -101,12 +103,20 @@ function uploadRequestStream(request, { resourceType, folder, maxBytes, mime }) 
     };
 
     cloudStream = cloudinary.uploader.upload_stream(
-      { resource_type: resourceType, folder },
+      { resource_type: resourceType, folder, ...uploadOptions },
       (error, result) => {
         if (error) return fail(error);
         if (settled) return;
         settled = true;
-        resolve(result.secure_url);
+        resolve(returnAsset ? {
+          publicId: result.public_id,
+          resourceType: result.resource_type,
+          deliveryType: result.type || uploadOptions.type || "upload",
+          version: result.version,
+          format: result.format || "",
+          bytes: result.bytes,
+          secureUrl: result.secure_url,
+        } : result.secure_url);
       }
     );
     cloudStream.on("error", (error) => {
@@ -144,6 +154,17 @@ function uploadRequestStream(request, { resourceType, folder, maxBytes, mime }) 
   });
 }
 
+function signedAuthenticatedAssetUrl(asset) {
+  return cloudinary.url(asset.publicId, {
+    resource_type: asset.resourceType,
+    type: "authenticated",
+    secure: true,
+    sign_url: true,
+    version: asset.version || undefined,
+    ...(asset.resourceType === "image" && asset.format ? { format: asset.format } : {}),
+  });
+}
+
 module.exports = {
   uploadIfBase64,
   uploadArrayIfBase64,
@@ -152,4 +173,5 @@ module.exports = {
   cloudinaryAssetFromUrl,
   collectPropertyMediaAssets,
   deleteCloudinaryAssets,
+  signedAuthenticatedAssetUrl,
 };

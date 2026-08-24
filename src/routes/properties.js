@@ -4,9 +4,12 @@ const Property = require("../models/Property");
 const Lead = require("../models/Lead");
 const FavoriteProperty = require("../models/FavoriteProperty");
 const MediaCleanupJob = require("../models/MediaCleanupJob");
+const PropertyPosterDocument = require("../models/PropertyPosterDocument");
+const PropertyPosterAccount = require("../models/PropertyPosterAccount");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
-const customerOnly = require("../middleware/customerOnly");
+const propertyOwnerOnly = require("../middleware/propertyOwnerOnly");
+const customerOrGuest = require("../middleware/customerOrGuest");
 const { linkProperty, unlinkProperty, relinkProperty } = require("../services/propertyLinkSync");
 const {
   uploadIfBase64,
@@ -15,6 +18,8 @@ const {
   deleteCloudinaryAssets,
 } = require("../utils/mediaUpload");
 const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
+const { normalizePropertySubmissionProfile, PropertySubmissionProfileError } = require("../utils/propertySubmissionProfile");
+const { sendPropertySubmissionEmail } = require("../services/emailService");
 
 const router = express.Router();
 const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
@@ -68,7 +73,7 @@ function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
 
 function withoutWorkflowFields(body) {
   const clean = { ...body };
-  for (const key of ["_id", "id", "postedBy", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed"]) {
+  for (const key of ["_id", "id", "postedBy", "propertyPoster", "submissionProfile", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed"]) {
     delete clean[key];
   }
   delete clean.maintenanceCharges;
@@ -86,9 +91,36 @@ function withoutWorkflowFields(body) {
   return clean;
 }
 
-function presentProperty(property, { includeDocumentUrls = false } = {}) {
+function presentSubmissionProfile(profile) {
+  if (!profile) return undefined;
+  const source = typeof profile.toObject === "function" ? profile.toObject() : profile;
+  const presentDocument = (document) => document ? {
+    id: String(document.document || document.id || ""),
+    purpose: document.purpose,
+    fileName: document.fileName,
+    mimeType: document.mimeType,
+  } : undefined;
+  return {
+    posterType: source.posterType,
+    verifiedEmail: source.verifiedEmail,
+    consentAcceptedAt: source.consentAcceptedAt,
+    ...(source.posterType === "company" ? { company: {
+      ...source.company,
+      panDocument: presentDocument(source.company?.panDocument),
+      reraDocument: presentDocument(source.company?.reraDocument),
+      registrationDocument: presentDocument(source.company?.registrationDocument),
+    } } : { individual: {
+      ...source.individual,
+      panDocument: presentDocument(source.individual?.panDocument),
+      aadhaarDocument: presentDocument(source.individual?.aadhaarDocument),
+      ownershipDocument: presentDocument(source.individual?.ownershipDocument),
+    } }),
+  };
+}
+
+function presentProperty(property, { includeDocumentUrls = false, includeSubmissionProfile = false } = {}) {
   const source = typeof property.toObject === "function" ? property.toObject() : property;
-  const { heroVideo, videos, virtualTourUrl, mediaAssets, ...visibleProperty } = source;
+  const { heroVideo, videos, virtualTourUrl, mediaAssets, submissionProfile, propertyPoster, ...visibleProperty } = source;
   if (!includeDocumentUrls && Array.isArray(visibleProperty.reraPhases)) {
     visibleProperty.reraPhases = visibleProperty.reraPhases.map((phase) => ({
       ...phase,
@@ -99,7 +131,34 @@ function presentProperty(property, { includeDocumentUrls = false } = {}) {
   if (!includeDocumentUrls && Array.isArray(visibleProperty.projectDownloads)) {
     visibleProperty.projectDownloads = visibleProperty.projectDownloads.map(({ fileUrl, ...document }) => document);
   }
-  return { ...visibleProperty, id: source._id.toString() };
+  return {
+    ...visibleProperty,
+    ...(includeSubmissionProfile ? { submissionProfile: presentSubmissionProfile(submissionProfile), propertyPoster } : {}),
+    id: source._id.toString(),
+  };
+}
+
+const ownerFilter = (req) => req.isPropertyPoster
+  ? { propertyPoster: req.user._id }
+  : { postedBy: req.user._id };
+
+async function attachPosterDocuments(documentIds, posterAccount, propertyId) {
+  if (!documentIds?.length) return;
+  await PropertyPosterDocument.updateMany(
+    { _id: { $in: documentIds }, posterAccount, $or: [{ property: null }, { property: propertyId }] },
+    { $set: { property: propertyId } },
+  );
+}
+
+function sendSubmissionNotification(property, account, status) {
+  if (!account?.email) return;
+  sendPropertySubmissionEmail({
+    email: account.email,
+    name: account.name,
+    propertyTitle: property.title,
+    reference: String(property._id).slice(-8).toUpperCase(),
+    status,
+  }).catch((error) => console.error("Property submission email failed:", error.message));
 }
 
 function withMediaLedger(payload, existing) {
@@ -436,25 +495,25 @@ router.get("/admin/property/:id", auth, adminOnly, async (req, res) => {
 });
 
 // Customer-owned property dashboard.
-router.get("/my", auth, customerOnly, async (req, res) => {
+router.get("/my", auth, propertyOwnerOnly, async (req, res) => {
   try {
-    const properties = await Property.find({ postedBy: req.user._id, submittedBy: "user" })
+    const properties = await Property.find({ ...ownerFilter(req), submittedBy: "user" })
       .select("-videos -brochure")
       .slice("images", 1)
       .sort("-updatedAt")
       .lean();
-    return res.json({ properties: properties.map(presentProperty) });
+    return res.json({ properties: properties.map((property) => presentProperty(property, { includeSubmissionProfile: true })) });
   } catch (error) {
     console.error("List customer properties error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-router.get("/my/:id", auth, customerOnly, async (req, res) => {
+router.get("/my/:id", auth, propertyOwnerOnly, async (req, res) => {
   try {
-    const property = await Property.findOne({ _id: req.params.id, postedBy: req.user._id, submittedBy: "user" }).lean();
+    const property = await Property.findOne({ _id: req.params.id, ...ownerFilter(req), submittedBy: "user" }).lean();
     if (!property) return res.status(404).json({ error: "Property not found" });
-    return res.json({ property: presentProperty(property, { includeDocumentUrls: true }) });
+    return res.json({ property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
     return res.status(500).json({ error: "Internal server error" });
@@ -470,9 +529,10 @@ router.get("/admin/submissions", auth, adminOnly, async (req, res) => {
       .select("-videos -brochure")
       .slice("images", 1)
       .populate("postedBy", "name phone email")
+      .populate("propertyPoster", "name phone email role")
       .sort("-updatedAt")
       .lean();
-    return res.json({ properties: properties.map(presentProperty) });
+    return res.json({ properties: properties.map((property) => presentProperty(property, { includeSubmissionProfile: true })) });
   } catch (error) {
     console.error("List public submissions error:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -483,10 +543,11 @@ router.get("/admin/submissions/:id", auth, adminOnly, async (req, res) => {
   try {
     const property = await Property.findOne({ _id: req.params.id, submittedBy: "user" })
       .populate("postedBy", "name phone email")
+      .populate("propertyPoster", "name phone email role")
       .populate("reviewMessages.sender", "name role")
       .lean();
     if (!property) return res.status(404).json({ error: "Submission not found" });
-    return res.json({ property: presentProperty(property, { includeDocumentUrls: true }) });
+    return res.json({ property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Submission not found" });
     return res.status(500).json({ error: "Internal server error" });
@@ -532,7 +593,11 @@ router.put(
       property.reviewedBy = req.user._id;
       property.reviewedAt = new Date();
       await property.save();
-      return res.json({ message: "Submission updated", property: presentProperty(property, { includeDocumentUrls: true }) });
+      if (property.propertyPoster) {
+        const poster = await PropertyPosterAccount.findById(property.propertyPoster).lean();
+        sendSubmissionNotification(property, poster, property.status);
+      }
+      return res.json({ message: "Submission updated", property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
     } catch (error) {
       if (error.name === "CastError") return res.status(404).json({ error: "Submission not found" });
       console.error("Review public submission error:", error);
@@ -541,19 +606,29 @@ router.put(
   }
 );
 
-router.put("/my/:id/resubmit", auth, customerOnly, async (req, res) => {
+router.put("/my/:id/resubmit", auth, propertyOwnerOnly, async (req, res) => {
   try {
-    const property = await Property.findOne({ _id: req.params.id, postedBy: req.user._id, submittedBy: "user" });
+    const property = await Property.findOne({ _id: req.params.id, ...ownerFilter(req), submittedBy: "user" });
     if (!property) return res.status(404).json({ error: "Property not found" });
     if (!["draft", "changes_requested"].includes(property.status)) {
       return res.status(409).json({ error: "This property cannot be resubmitted in its current status" });
     }
+    const propertyBody = { ...req.body };
+    delete propertyBody.submissionProfile;
     const normalized = preserveMediaOnImplicitClear(
-      req.body,
+      propertyBody,
       property,
-      prepareSubmittedPropertyPayload(req.body, property)
+      prepareSubmittedPropertyPayload(propertyBody, property)
     );
     property.set(withMediaLedger(await convertPropertyMedia(normalized), property));
+    let posterProfile;
+    if (req.isPropertyPoster && req.body.submissionProfile) {
+      posterProfile = await normalizePropertySubmissionProfile(req.body.submissionProfile, req.user, property.submissionProfile, property._id);
+      property.submissionProfile = posterProfile.profile;
+      req.user.name = posterProfile.displayName;
+      req.user.phone = posterProfile.phone;
+      await req.user.save();
+    }
     property.status = property.status === "draft" ? "submitted" : "resubmitted";
     property.published = false;
     property.verified = false;
@@ -562,18 +637,20 @@ router.put("/my/:id/resubmit", auth, customerOnly, async (req, res) => {
     property.rejectionReason = "";
     property.reviewMessages.push({ senderRole: "user", sender: req.user._id, message: "Property details updated and resubmitted." });
     await property.save();
-    return res.json({ message: "Property resubmitted for review", property: presentProperty(property, { includeDocumentUrls: true }) });
+    if (posterProfile) await attachPosterDocuments(posterProfile.documentIds, req.user._id, property._id);
+    if (req.isPropertyPoster) sendSubmissionNotification(property, req.user, property.status);
+    return res.json({ message: "Property resubmitted for review", property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
-    if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
+    if (error instanceof PropertyPayloadError || error instanceof PropertySubmissionProfileError) return res.status(400).json({ error: error.message });
     console.error("Resubmit property error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// OTP-authenticated RERA/project document download. The permanent Cloudinary
+// Customer or manual-guest document download. The permanent Cloudinary
 // URL is never included in the public property payload.
-router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOnly, async (req, res) => {
+router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOrGuest, async (req, res) => {
   try {
     if (!req.user.name || !req.user.email) {
       return res.status(400).json({ error: "Complete your name and email before downloading documents" });
@@ -603,12 +680,15 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOnly, a
       name: req.user.name,
       email: req.user.email,
       phone: req.user.phone,
-      message: `Verified document download for ${property.title}`,
+      message: `Document download for ${property.title}`,
       propertyId: property._id.toString(),
       propertyTitle: property.title,
       action: "document",
       phaseName: phase.name,
       documentName: document.label,
+      verificationSource: req.user.verificationSource || "unknown",
+      phoneVerified: Boolean(req.user.isVerified),
+      consentAt: req.user.consentAt || null,
     });
 
     const safeName = String(document.fileName || `${document.key}.pdf`).replace(/[^A-Za-z0-9._ -]/g, "_");
@@ -624,7 +704,7 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOnly, a
   }
 });
 
-router.get("/:id/project-downloads/:documentId/download", auth, customerOnly, async (req, res) => {
+router.get("/:id/project-downloads/:documentId/download", auth, customerOrGuest, async (req, res) => {
   try {
     if (!req.user.name || !req.user.email) {
       return res.status(400).json({ error: "Complete your name and email before downloading documents" });
@@ -650,11 +730,14 @@ router.get("/:id/project-downloads/:documentId/download", auth, customerOnly, as
       name: req.user.name,
       email: req.user.email,
       phone: req.user.phone,
-      message: `Verified ${document.kind} download for ${property.title}`,
+      message: `${document.kind} download for ${property.title}`,
       propertyId: property._id.toString(),
       propertyTitle: property.title,
       action: "document",
       documentName: document.label,
+      verificationSource: req.user.verificationSource || "unknown",
+      phoneVerified: Boolean(req.user.isVerified),
+      consentAt: req.user.consentAt || null,
     });
     const safeName = String(document.fileName || `${document.kind}.pdf`).replace(/[^A-Za-z0-9._ -]/g, "_");
     res.set("Content-Type", document.mimeType);
@@ -873,6 +956,7 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
     const exclusiveAssets = ownedAssets.filter(
       (asset) => !referencedElsewhere.has(`${asset.resourceType}:${asset.publicId}`)
     );
+    const verificationDocuments = await PropertyPosterDocument.find({ property: property._id }).lean();
 
     await Property.deleteOne({ _id: property._id });
 
@@ -901,6 +985,16 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
         console.error("Property media cleanup pending:", cleanupError);
       }
     }
+    if (verificationDocuments.length) {
+      try {
+        await deleteCloudinaryAssets(verificationDocuments);
+        await PropertyPosterDocument.deleteMany({ property: property._id });
+        mediaCleanup = mediaCleanup === "pending" ? "pending" : "completed";
+      } catch (cleanupError) {
+        mediaCleanup = "pending";
+        console.error("Property verification document cleanup pending:", cleanupError);
+      }
+    }
 
     return res.json({ message: "Property deleted successfully", mediaCleanup });
   } catch (error) {
@@ -917,50 +1011,73 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
 router.post(
   "/public",
   auth,
-  customerOnly,
+  propertyOwnerOnly,
   async (req, res) => {
     try {
-      const normalizedBody = prepareSubmittedPropertyPayload(req.body);
+      const propertyBody = { ...req.body };
+      delete propertyBody.submissionProfile;
+      const normalizedBody = prepareSubmittedPropertyPayload(propertyBody);
+      const posterProfile = req.isPropertyPoster
+        ? await normalizePropertySubmissionProfile(req.body.submissionProfile, req.user)
+        : null;
       const propertyData = withMediaLedger({
         ...(await convertPropertyMedia(normalizedBody)),
         published: false,
         verified: false,
         status: "submitted",
-        postedBy: req.user._id,
+        ...(req.isPropertyPoster ? { propertyPoster: req.user._id, submissionProfile: posterProfile.profile } : { postedBy: req.user._id }),
         submittedBy: "user",
         lastSubmittedAt: new Date(),
         postedDate: new Date().toISOString(),
       });
 
       const property = await Property.create(propertyData);
+      if (posterProfile) {
+        await attachPosterDocuments(posterProfile.documentIds, req.user._id, property._id);
+        req.user.name = posterProfile.displayName;
+        req.user.phone = posterProfile.phone;
+        await req.user.save();
+        sendSubmissionNotification(property, req.user, property.status);
+      }
 
       return res.status(201).json({
         message: "Property submitted successfully for admin review",
-        property: presentProperty(property, { includeDocumentUrls: true }),
+        property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }),
       });
     } catch (error) {
-      if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
+      if (error instanceof PropertyPayloadError || error instanceof PropertySubmissionProfileError) return res.status(400).json({ error: error.message });
       console.error("Create public property error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
   }
 );
 
-router.post("/draft", auth, customerOnly, async (req, res) => {
+router.post("/draft", auth, propertyOwnerOnly, async (req, res) => {
   try {
-    const normalizedBody = prepareOptionalPropertyPayload(req.body);
+    const propertyBody = { ...req.body };
+    delete propertyBody.submissionProfile;
+    const normalizedBody = prepareOptionalPropertyPayload(propertyBody);
+    const posterProfile = req.isPropertyPoster
+      ? await normalizePropertySubmissionProfile(req.body.submissionProfile, req.user)
+      : null;
     const property = await Property.create(withMediaLedger({
       ...(await convertPropertyMedia(normalizedBody)),
       published: false,
       verified: false,
       status: "draft",
-      postedBy: req.user._id,
+      ...(req.isPropertyPoster ? { propertyPoster: req.user._id, submissionProfile: posterProfile.profile } : { postedBy: req.user._id }),
       submittedBy: "user",
       postedDate: new Date().toISOString(),
     }));
-    return res.status(201).json({ message: "Draft saved", property: presentProperty(property, { includeDocumentUrls: true }) });
+    if (posterProfile) {
+      await attachPosterDocuments(posterProfile.documentIds, req.user._id, property._id);
+      req.user.name = posterProfile.displayName;
+      req.user.phone = posterProfile.phone;
+      await req.user.save();
+    }
+    return res.status(201).json({ message: "Draft saved", property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
   } catch (error) {
-    if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
+    if (error instanceof PropertyPayloadError || error instanceof PropertySubmissionProfileError) return res.status(400).json({ error: error.message });
     return res.status(500).json({ error: "Internal server error" });
   }
 });

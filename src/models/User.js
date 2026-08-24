@@ -31,6 +31,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    verificationSource: {
+      type: String,
+      enum: ["unknown", "password", "truecaller"],
+      default: "unknown",
+    },
   },
   {
     timestamps: true,

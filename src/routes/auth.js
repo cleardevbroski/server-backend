@@ -4,22 +4,16 @@ const jwt = require("jsonwebtoken");
 const { body, validationResult } = require("express-validator");
 const rateLimit = require("express-rate-limit");
 const User = require("../models/User");
-const { createAndSendOTP, verifyOTP } = require("../services/otpService");
+const GuestSession = require("../models/GuestSession");
+const PropertyPosterAccount = require("../models/PropertyPosterAccount");
+const TruecallerVerification = require("../models/TruecallerVerification");
+const { fetchTruecallerProfile } = require("../services/truecallerService");
 const auth = require("../middleware/auth");
 const { hashPassword, verifyPassword } = require("../utils/password");
 const { sendPasswordResetEmail } = require("../services/emailService");
 const { recordLoginAudit } = require("../services/loginAuditService");
 
 const router = express.Router();
-
-// Rate limit OTP requests: max 5 per 15 minutes per IP
-const otpLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: { error: "Too many OTP requests. Please try again after 15 minutes." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
 
 // Rate limit admin login: max 5 per 15 minutes per IP (CR004)
 const adminLoginLimiter = rateLimit({
@@ -38,6 +32,25 @@ const customerAuthLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const truecallerStartLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: "Too many verification attempts. Please try again after 15 minutes." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const truecallerStatusLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 120,
+  message: { error: "Too many verification status checks. Please try again shortly." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const TRUECALLER_REQUEST_TTL_MS = 2 * 60 * 1000;
+const GUEST_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
 function signUserToken(user) {
   return jwt.sign(
     { userId: user._id, phone: user.phone, role: user.role },
@@ -46,8 +59,46 @@ function signUserToken(user) {
   );
 }
 
+function signGuestToken(guest) {
+  return jwt.sign(
+    { guestSessionId: guest._id, phone: guest.phone, role: "guest" },
+    process.env.JWT_SECRET,
+    { expiresIn: "30d" },
+  );
+}
+
 function publicUser(user) {
-  return { id: user._id, phone: user.phone, name: user.name, email: user.email, role: user.role };
+  return {
+    id: user._id,
+    phone: user.phone,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    isVerified: Boolean(user.isVerified),
+    verificationSource: user.verificationSource || (user.isVerified ? "unknown" : "manual"),
+  };
+}
+
+function isProfileComplete(user) {
+  return String(user?.name || "").trim().length >= 2 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(user?.email || ""));
+}
+
+async function findOrCreateTruecallerUser({ phone, name, email }) {
+  let user = await User.findOne({ phone });
+  if (user?.role === "admin") throw new Error("Administrator accounts cannot use customer verification");
+
+  const safeEmail = email && !(await User.exists({ email, phone: { $ne: phone } })) ? email : undefined;
+  if (!user) {
+    user = await User.create({ phone, name, ...(safeEmail ? { email: safeEmail } : {}), isVerified: true, verificationSource: "truecaller" });
+    return { user, isNewUser: true };
+  }
+
+  user.isVerified = true;
+  user.verificationSource = "truecaller";
+  if (!user.name && name) user.name = name;
+  if (!user.email && safeEmail) user.email = safeEmail;
+  await user.save();
+  return { user, isNewUser: false };
 }
 
 router.post(
@@ -73,6 +124,7 @@ router.post(
         email,
         passwordHash: await hashPassword(req.body.password),
         isVerified: true,
+        verificationSource: "password",
       });
       await recordLoginAudit(req, { user, method: "password_registration", status: "success" });
       return res.status(201).json({ message: "Account created", token: signUserToken(user), user: publicUser(user) });
@@ -161,125 +213,48 @@ router.post(
   }
 );
 
-// ─── POST /api/auth/send-otp ────────────────────────────────────
-// Send an OTP to the given phone number
+// Manual visitors receive a guest session for lead forms and downloads. This
+// never joins an existing verified account and cannot access private customer
+// resources such as saved properties or property submissions.
 router.post(
-  "/send-otp",
-  otpLimiter,
+  "/manual-session",
+  customerAuthLimiter,
   [
-    body("phone")
-      .trim()
-      .matches(/^[6-9]\d{9}$/)
-      .withMessage("Please enter a valid 10-digit Indian mobile number"),
+    body("name").trim().isLength({ min: 2, max: 100 }).withMessage("Enter your full name"),
+    body("email").trim().isEmail().normalizeEmail().withMessage("Enter a valid email address"),
+    body("phone").trim().matches(/^[6-9]\d{9}$/).withMessage("Enter a valid 10-digit Indian mobile number"),
+    body("consent").custom((value) => value === true).withMessage("Consent is required"),
   ],
   async (req, res) => {
     try {
       const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg });
-      }
-
-      const { phone } = req.body;
-      const result = await createAndSendOTP(phone);
-
-      if (result.success) {
-        await recordLoginAudit(req, { phone, method: "otp_requested", status: "success" });
-        return res.json({
-          message: "OTP sent successfully",
-          mode: result.mode, // "dev" or "sms"
-          ...(result.mode === "dev" && result.devOtp ? { devOtp: result.devOtp } : {}),
-        });
-      } else {
-        return res.status(result.statusCode || 500).json({ error: result.error || "Failed to send OTP" });
-      }
-    } catch (error) {
-      console.error("Send OTP error:", error);
-      return res.status(500).json({ error: "Internal server error" });
-    }
-  }
-);
-
-// ─── POST /api/auth/verify-otp ──────────────────────────────────
-// Verify OTP and return JWT token
-router.post(
-  "/verify-otp",
-  [
-    body("phone")
-      .trim()
-      .matches(/^[6-9]\d{9}$/)
-      .withMessage("Invalid phone number"),
-    body("otp")
-      .trim()
-      .isLength({ min: 6, max: 6 })
-      .withMessage("OTP must be 6 digits"),
-  ],
-  async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg });
-      }
-
-      const { phone, otp } = req.body;
-      const result = await verifyOTP(phone, otp);
-
-      if (!result.valid) {
-        return res.status(400).json({ error: result.reason });
-      }
-
-      // OTP verified — find or create user
-      let user = await User.findOne({ phone });
-
-      if (!user) {
-        user = await User.create({
-          phone,
-          isVerified: true,
-        });
-        console.log(`🆕 New user registered: ${phone}`);
-      } else {
-        user.isVerified = true;
-        await user.save();
-      }
-
-      // Generate JWT
-      const token = jwt.sign(
-        { userId: user._id, phone: user.phone, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRY || "30d" }
-      );
-      await recordLoginAudit(req, { user, method: "otp", status: "success" });
-
-      return res.json({
-        message: "Login successful",
-        token,
-        user: {
-          id: user._id,
-          phone: user.phone,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+      if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+      const now = new Date();
+      const guest = await GuestSession.create({
+        name: req.body.name,
+        email: req.body.email,
+        phone: req.body.phone,
+        consentAt: now,
+        expiresAt: new Date(now.getTime() + GUEST_SESSION_TTL_MS),
+      });
+      await recordLoginAudit(req, { phone: guest.phone, email: guest.email, method: "manual", status: "success" });
+      return res.status(201).json({
+        message: "Details saved",
+        token: signGuestToken(guest),
+        user: publicUser(guest),
       });
     } catch (error) {
-      console.error("Verify OTP error:", error);
-      return res.status(500).json({ error: "Internal server error" });
+      console.error("Create manual guest session error:", error);
+      return res.status(500).json({ error: "Unable to save your details" });
     }
-  }
+  },
 );
 
 // ─── GET /api/auth/me ───────────────────────────────────────────
 // Get current user profile (protected)
 router.get("/me", auth, async (req, res) => {
   try {
-    return res.json({
-      user: {
-        id: req.user._id,
-        phone: req.user.phone,
-        name: req.user.name,
-        email: req.user.email,
-        role: req.user.role,
-      },
-    });
+    return res.json({ user: publicUser(req.user) });
   } catch (error) {
     console.error("Get profile error:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -305,19 +280,22 @@ router.put(
       const { name, email } = req.body;
       const updates = {};
       if (name !== undefined) updates.name = name;
-      if (email !== undefined) updates.email = email;
+      if (email !== undefined) {
+        if (req.isPropertyPoster && String(email).trim().toLowerCase() !== req.user.email) {
+          return res.status(400).json({ error: "Verify a new email address before changing the property account email" });
+        }
+        updates.email = email;
+      }
 
-      const user = await User.findByIdAndUpdate(req.user._id, updates, { new: true });
+      const user = req.isPropertyPoster
+        ? await PropertyPosterAccount.findByIdAndUpdate(req.user._id, updates, { new: true })
+        : req.user.role === "guest"
+          ? await GuestSession.findByIdAndUpdate(req.user._id, updates, { new: true })
+          : await User.findByIdAndUpdate(req.user._id, updates, { new: true });
 
       return res.json({
         message: "Profile updated",
-        user: {
-          id: user._id,
-          phone: user.phone,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+        user: publicUser(user),
       });
     } catch (error) {
       if (error?.code === 11000) return res.status(409).json({ error: "That email address is already linked to another account" });
@@ -327,70 +305,132 @@ router.put(
   }
 );
 
-// ─── POST /api/auth/truecaller-login ─────────────────────────────
-// Bypass OTP login for Truecaller mock
+// ─── Truecaller mobile-web verification ─────────────────────────
+// The browser never supplies a phone number as proof of identity. Truecaller
+// posts a short-lived access token to this backend, which fetches the verified
+// profile before a customer JWT can be issued.
 router.post(
-  "/truecaller-login",
-  [
-    body("phone")
-      .trim()
-      .matches(/^[6-9]\d{9}$/)
-      .withMessage("Invalid phone number"),
-  ],
+  "/truecaller/start",
+  truecallerStartLimiter,
+  [body("purpose").optional().isIn(["login", "enquiry", "brochure", "site_visit", "contact"])],
   async (req, res) => {
     try {
       const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ error: errors.array()[0].msg });
-      }
+      if (!errors.isEmpty()) return res.status(400).json({ error: "Invalid verification purpose" });
+      const partnerKey = String(process.env.TRUECALLER_PARTNER_KEY || "").trim();
+      if (!partnerKey) return res.status(503).json({ error: "Truecaller verification is not configured yet. Enter your details manually." });
 
-      const { phone } = req.body;
+      const requestId = crypto.randomBytes(24).toString("base64url");
+      const params = new URLSearchParams({
+        type: "btmsheet",
+        requestNonce: requestId,
+        partnerKey,
+        partnerName: process.env.TRUECALLER_PARTNER_NAME || "ClearTitle One",
+        lang: "en",
+        loginPrefix: "continue",
+        loginSuffix: "loginsignup",
+        ctaPrefix: "continuewith",
+        ctaColor: "#121B35",
+        ctaTextColor: "#F2C052",
+        btnShape: "round",
+        skipOption: "useanothermethod",
+        ttl: "90000",
+      });
+      if (process.env.TRUECALLER_PRIVACY_URL) params.set("privacyUrl", process.env.TRUECALLER_PRIVACY_URL);
+      if (process.env.TRUECALLER_TERMS_URL) params.set("termsUrl", process.env.TRUECALLER_TERMS_URL);
 
-      // Reserved super-admin phone — never allow the unverified bypass to claim it
-      if (phone === "9999999999") {
-        return res.status(403).json({ error: "This phone number cannot be used for Truecaller login" });
-      }
-
-      // Find or create user
-      let user = await User.findOne({ phone });
-
-      // Never mint privileged tokens from an unverified client-supplied phone
-      if (user && user.role === "admin") {
-        return res.status(403).json({ error: "Truecaller login is not available for admin accounts" });
-      }
-
-      if (!user) {
-        user = await User.create({ phone, isVerified: true });
-        console.log(`🆕 New user registered via Truecaller bypass: ${phone}`);
-      } else {
-        user.isVerified = true;
-        await user.save();
-      }
-
-      // Generate JWT
-      const token = jwt.sign(
-        { userId: user._id, phone: user.phone, role: user.role },
-        process.env.JWT_SECRET,
-        { expiresIn: process.env.JWT_EXPIRY || "30d" }
-      );
-
-      return res.json({
-        message: "Login successful (Truecaller Bypass)",
-        token,
-        user: {
-          id: user._id,
-          phone: user.phone,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-        },
+      await TruecallerVerification.create({
+        requestId,
+        purpose: req.body.purpose || "login",
+        expiresAt: new Date(Date.now() + TRUECALLER_REQUEST_TTL_MS),
+      });
+      return res.status(201).json({
+        requestId,
+        deepLink: `truecallersdk://truesdk/web_verify?${params.toString()}`,
+        expiresInSeconds: TRUECALLER_REQUEST_TTL_MS / 1000,
       });
     } catch (error) {
-      console.error("Truecaller login error:", error);
-      return res.status(500).json({ error: "Internal server error" });
+      console.error("Start Truecaller verification error:", error);
+      return res.status(500).json({ error: "Unable to start Truecaller verification" });
     }
   }
 );
+
+router.post("/truecaller/callback", async (req, res) => {
+  const requestId = String(req.body?.requestId || "");
+  try {
+    if (!requestId) return res.status(202).json({ accepted: true });
+    const verification = await TruecallerVerification.findOne({ requestId });
+    if (!verification || verification.expiresAt <= new Date() || ["consumed", "rejected"].includes(verification.status)) {
+      return res.status(202).json({ accepted: true });
+    }
+
+    if (req.body.status === "flow_invoked") {
+      verification.status = "invoked";
+      await verification.save();
+      return res.status(202).json({ accepted: true });
+    }
+    if (req.body.status === "user_rejected") {
+      verification.status = "rejected";
+      await verification.save();
+      return res.status(202).json({ accepted: true });
+    }
+
+    const profile = await fetchTruecallerProfile(req.body.endpoint, req.body.accessToken);
+    verification.status = "verified";
+    verification.phone = profile.phone;
+    verification.name = profile.name;
+    verification.email = profile.email;
+    verification.failureReason = "";
+    await verification.save();
+    return res.status(202).json({ accepted: true });
+  } catch (error) {
+    if (requestId) {
+      await TruecallerVerification.updateOne(
+        { requestId, status: { $in: ["pending", "invoked"] } },
+        { $set: { status: "failed", failureReason: String(error.message || "Profile verification failed").slice(0, 300) } }
+      ).catch(() => {});
+    }
+    console.error("Truecaller callback error:", error.response?.data || error.message);
+    return res.status(202).json({ accepted: true });
+  }
+});
+
+router.get("/truecaller/status/:requestId", truecallerStatusLimiter, async (req, res) => {
+  try {
+    const requestId = String(req.params.requestId || "");
+    const verification = await TruecallerVerification.findOne({ requestId });
+    if (!verification) return res.status(404).json({ error: "Verification request not found" });
+    if (verification.expiresAt <= new Date()) return res.status(410).json({ error: "Truecaller verification expired. Enter your details manually." });
+    if (verification.status === "rejected") return res.json({ status: "rejected" });
+    if (verification.status === "failed") return res.json({ status: "failed" });
+    if (verification.status === "consumed") return res.status(409).json({ error: "Verification request has already been used" });
+    if (verification.status !== "verified") return res.json({ status: verification.status });
+
+    const { user, isNewUser } = await findOrCreateTruecallerUser(verification);
+    const consumed = await TruecallerVerification.findOneAndUpdate(
+      { _id: verification._id, status: "verified" },
+      { $set: { status: "consumed" } },
+      { new: true }
+    );
+    if (!consumed) return res.status(409).json({ error: "Verification request has already been used" });
+
+    await recordLoginAudit(req, { user, method: "truecaller", status: "success" });
+    return res.json({
+      status: "verified",
+      token: signUserToken(user),
+      user: publicUser(user),
+      isNewUser,
+      profileComplete: isProfileComplete(user),
+    });
+  } catch (error) {
+    if (error.message === "Administrator accounts cannot use customer verification") {
+      return res.status(403).json({ error: error.message });
+    }
+    console.error("Complete Truecaller verification error:", error);
+    return res.status(500).json({ error: "Unable to complete Truecaller verification" });
+  }
+});
 
 // ─── POST /api/auth/admin-login ───────────────────────────────
 // Dedicated admin login for the dashboard

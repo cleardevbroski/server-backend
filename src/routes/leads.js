@@ -79,7 +79,7 @@ router.post(
   },
 );
 
-// POST /api/leads/consultation/property (OTP-authenticated, property-specific)
+// POST /api/leads/consultation/property (Truecaller or manual guest identity)
 router.post(
   "/consultation/property",
   auth,
@@ -118,6 +118,9 @@ router.post(
         propertyUrl: req.body.propertyUrl || "",
         lawyerId: lawyer._id.toString(),
         lawyerName: lawyer.name,
+        verificationSource: req.user.verificationSource || "unknown",
+        phoneVerified: Boolean(req.user.isVerified),
+        consentAt: req.user.consentAt || null,
       });
 
       let whatsappNumber = String(lawyer.whatsappNumber).replace(/\D/g, "");
@@ -135,7 +138,7 @@ router.post(
         "",
         `Customer: ${req.user.name}`,
         `Email: ${req.user.email}`,
-        `Verified phone: +91 ${req.user.phone}`,
+        `${req.user.isVerified ? "Verified phone" : "Phone"}: +91 ${req.user.phone}`,
         `ClearTitle request ID: ${lead._id}`,
       ].filter(Boolean);
 
@@ -151,7 +154,7 @@ router.post(
   },
 );
 
-// POST /api/leads/property-interest (verified public-property action)
+// POST /api/leads/property-interest (Truecaller or manual guest identity)
 router.post(
   "/property-interest",
   auth,
@@ -168,22 +171,25 @@ router.post(
     try {
       const errors = validationResult(req);
       if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
-      if (req.body.phone !== req.user.phone) return res.status(403).json({ error: "Verify the same phone number before continuing" });
+      if (req.body.phone !== req.user.phone) return res.status(403).json({ error: "Use the same phone number saved in your details" });
 
       const lead = await Lead.create({
         type: "property_interest",
-        name: req.user.name || `Verified ${req.body.audience}`,
+        name: req.user.name || req.body.audience,
         email: req.user.email || "",
         phone: req.user.phone,
-        message: `Verified ${req.body.action} request for ${req.body.propertyTitle}`,
+        message: `${req.body.action} request for ${req.body.propertyTitle}`,
         propertyId: req.body.propertyId,
         propertyTitle: req.body.propertyTitle,
         audience: req.body.audience,
         budget: req.body.budget,
         action: req.body.action,
+        verificationSource: req.user.verificationSource || "unknown",
+        phoneVerified: Boolean(req.user.isVerified),
+        consentAt: req.user.consentAt || null,
       });
       return res.status(201).json({
-        message: "Your verified request has been received.",
+        message: "Your request has been received.",
         lead: { ...lead.toObject(), id: lead._id.toString() },
       });
     } catch (error) {

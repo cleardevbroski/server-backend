@@ -82,6 +82,7 @@ app.use(
 
 // ─── Routes ─────────────────────────────────────────────────────
 app.use("/api/auth", authRoutes);
+app.use("/api/property-auth", require("./routes/propertyAuth"));
 app.use("/api/login-reports", require("./routes/loginReports"));
 app.use("/api/properties", propertyRoutes);
 app.use("/api/dealers", dealerRoutes);
@@ -91,6 +92,7 @@ app.use("/api/advertisements", advertisementRoutes);
 app.use("/api/cms", require("./routes/cms"));
 app.use("/api/leads", leadRoutes);
 app.use("/api/channel-partners", require("./routes/channelPartners"));
+app.use("/api/channel-partner-auth", require("./routes/channelPartnerAuth"));
 app.use("/api/channel-partner-leads", require("./routes/channelPartnerLeads"));
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/client-activity", require("./routes/clientActivity"));

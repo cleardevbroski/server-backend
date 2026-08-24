@@ -9,6 +9,12 @@ beforeAll(async () => {
   await mongoose.connect(mongod.getUri());
 }, 120000);
 
+beforeEach(() => {
+  // Tests opt in to provider calls explicitly. Never use a developer's or
+  // deployment's real Resend credential for automated test recipients.
+  delete process.env.RESEND_API_KEY;
+});
+
 afterEach(async () => {
   const collections = mongoose.connection.collections;
   for (const key in collections) {

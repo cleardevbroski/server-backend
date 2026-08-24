@@ -1,5 +1,40 @@
 const mongoose = require("mongoose");
 
+const verificationDocumentRefSchema = new mongoose.Schema({
+  document: { type: mongoose.Schema.Types.ObjectId, ref: "PropertyPosterDocument", required: true },
+  purpose: { type: String, required: true, trim: true },
+  fileName: { type: String, required: true, trim: true },
+  mimeType: { type: String, required: true, trim: true },
+}, { _id: false });
+
+const propertySubmissionProfileSchema = new mongoose.Schema({
+  posterType: { type: String, enum: ["company", "individual"], required: true },
+  verifiedEmail: { type: String, required: true, lowercase: true, trim: true },
+  consentAcceptedAt: { type: Date, required: true },
+  company: {
+    companyName: { type: String, default: "", trim: true },
+    builderName: { type: String, default: "", trim: true },
+    contactPersonName: { type: String, default: "", trim: true },
+    designation: { type: String, default: "", trim: true },
+    phone: { type: String, default: "", trim: true },
+    reraApplicable: { type: Boolean, default: false },
+    reraNumber: { type: String, default: "", trim: true },
+    panLast4: { type: String, default: "", trim: true },
+    panDocument: { type: verificationDocumentRefSchema, default: undefined },
+    reraDocument: { type: verificationDocumentRefSchema, default: undefined },
+    registrationDocument: { type: verificationDocumentRefSchema, default: undefined },
+  },
+  individual: {
+    ownerName: { type: String, default: "", trim: true },
+    phone: { type: String, default: "", trim: true },
+    panLast4: { type: String, default: "", trim: true },
+    aadhaarLast4: { type: String, default: "", trim: true },
+    panDocument: { type: verificationDocumentRefSchema, default: undefined },
+    aadhaarDocument: { type: verificationDocumentRefSchema, default: undefined },
+    ownershipDocument: { type: verificationDocumentRefSchema, default: undefined },
+  },
+}, { _id: false });
+
 const planPointSchema = new mongoose.Schema(
   {
     x: { type: Number, min: 0, max: 100 },
@@ -451,6 +486,12 @@ const propertySchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    propertyPoster: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "PropertyPosterAccount",
+      default: null,
+    },
+    submissionProfile: { type: propertySubmissionProfileSchema, default: undefined },
 
     // Relational links set by an admin (null = unlinked; falls back to free-text `builder` / dealer heuristics)
     builderId: { type: mongoose.Schema.Types.ObjectId, ref: "Builder", default: null },

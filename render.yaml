@@ -32,9 +32,17 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      - key: PROPERTY_EMAIL_FROM
+        sync: false
       - key: CHANNEL_PARTNER_EMAIL_FROM
         sync: false
       - key: CHANNEL_PARTNER_REPLY_TO
         sync: false
-      - key: FAST2SMS_API_KEY
+      - key: TRUECALLER_PARTNER_KEY
+        sync: false
+      - key: TRUECALLER_PARTNER_NAME
+        value: ClearTitle One
+      - key: TRUECALLER_PRIVACY_URL
+        sync: false
+      - key: TRUECALLER_TERMS_URL
         sync: false

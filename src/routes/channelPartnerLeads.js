@@ -1,6 +1,5 @@
 const crypto = require("crypto");
 const express = require("express");
-const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const rateLimit = require("express-rate-limit");
 const ChannelPartner = require("../models/ChannelPartner");
@@ -18,6 +17,7 @@ const {
   sendClientClashOwnerEmail,
 } = require("../services/emailService");
 const { expireChannelPartnerClients } = require("../services/channelPartnerClientExpiry");
+const { ACTIVE_STATUSES, createPartnerToken, partnerSession } = require("../services/channelPartnerSession");
 
 const router = express.Router();
 const codeLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 1000 : 12, message: { error: "Unable to verify that code. Please try again later." } });
@@ -31,7 +31,6 @@ const normalizeMobile = (value) => {
 };
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MOBILE = /^[6-9][0-9]{9}$/;
-const ACTIVE_STATUSES = new Set(["active", "approved"]);
 const CLIENT_OWNERSHIP_MS = 90 * 24 * 60 * 60 * 1000;
 const INITIAL_CREDIT_DELAY_MS = 12 * 60 * 60 * 1000;
 const CLIENT_STATUSES = ["pending", "approved", "successful", "rejected", "expired"];
@@ -45,29 +44,6 @@ async function nextLeadNumber() {
     { new: true, upsert: true, setDefaultsOnInsert: true },
   );
   return `CTL-${year}-${String(counter.sequence).padStart(6, "0")}`;
-}
-
-function createPartnerToken(partner) {
-  return jwt.sign(
-    { purpose: "channel-partner-client-registration", partnerId: partner._id.toString() },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.CHANNEL_PARTNER_SESSION_EXPIRY || "4h" },
-  );
-}
-
-async function partnerSession(req, res, next) {
-  try {
-    const header = req.headers.authorization || "";
-    if (!header.startsWith("Bearer ")) return res.status(401).json({ error: "Channel Partner code is required." });
-    const decoded = jwt.verify(header.slice(7), process.env.JWT_SECRET);
-    if (decoded.purpose !== "channel-partner-client-registration" || !decoded.partnerId) return res.status(401).json({ error: "Invalid Channel Partner session." });
-    const partner = await ChannelPartner.findById(decoded.partnerId);
-    if (!partner || !ACTIVE_STATUSES.has(partner.status)) return res.status(403).json({ error: "This Channel Partner code is not active." });
-    req.channelPartner = partner;
-    return next();
-  } catch (error) {
-    return res.status(401).json({ error: error.name === "TokenExpiredError" ? "Channel Partner session expired. Enter the code again." : "Invalid Channel Partner session." });
-  }
 }
 
 function clientRecord(client) {
@@ -298,6 +274,23 @@ router.get("/projects", partnerSession, async (_req, res) => {
     console.error("Channel partner projects error:", error);
     return res.status(500).json({ error: "Unable to load projects." });
   }
+});
+
+router.get("/mine/profile", partnerSession, async (req, res) => {
+  const partner = req.channelPartner;
+  return res.json({
+    partner: {
+      name: partner.company.name,
+      type: partner.partnerType || "company",
+      code: `••••${partner.partnerCodeLast4}`,
+      codeLast4: partner.partnerCodeLast4,
+      contactName: partner.contact.name,
+      mobile: partner.contact.mobile,
+      email: partner.contact.email,
+      city: partner.address.city,
+      state: partner.address.state,
+    },
+  });
 });
 
 router.get("/mine", partnerSession, async (req, res) => {

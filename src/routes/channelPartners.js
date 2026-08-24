@@ -3,12 +3,16 @@ const express = require("express");
 const rateLimit = require("express-rate-limit");
 const ChannelPartner = require("../models/ChannelPartner");
 const ChannelPartnerCounter = require("../models/ChannelPartnerCounter");
+const ChannelPartnerClient = require("../models/ChannelPartnerClient");
+const ChannelPartnerClientClash = require("../models/ChannelPartnerClientClash");
+const ChannelPartnerRecovery = require("../models/ChannelPartnerRecovery");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const { buildChannelPartnerPayload } = require("../utils/channelPartnerPayload");
 const { encryptSensitive, decryptSensitive, hashLookup } = require("../utils/channelPartnerCrypto");
 const { canTransition, transitionRequiresReason } = require("../services/channelPartnerWorkflow");
 const { sendChannelPartnerRegisteredEmail, sendChannelPartnerStatusEmail } = require("../services/emailService");
+const { createPartnerToken } = require("../services/channelPartnerSession");
 
 const router = express.Router();
 const submitLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 1000 : 5, message: { error: "Too many applications. Please try again later." } });
@@ -75,7 +79,7 @@ router.post("/", submitLimiter, async (req, res) => {
     const idempotencyKey = idempotencyRaw ? crypto.createHash("sha256").update(idempotencyRaw).digest("hex") : "";
     if (idempotencyKey) {
       const existing = await ChannelPartner.findOne({ idempotencyKey }).select("+partnerCodeEncrypted");
-      if (existing) return res.status(200).json({ message: "Channel partner already registered", application: publicReceipt(existing, existing.partnerCodeEncrypted ? decryptSensitive(existing.partnerCodeEncrypted) : "") });
+      if (existing) return res.status(200).json({ message: "Channel partner already registered", token: createPartnerToken(existing), application: publicReceipt(existing, existing.partnerCodeEncrypted ? decryptSensitive(existing.partnerCodeEncrypted) : "") });
     }
 
     const parsed = buildChannelPartnerPayload(req.body || {});
@@ -83,6 +87,7 @@ router.post("/", submitLimiter, async (req, res) => {
     const duplicate = await ChannelPartner.exists({
       $or: [
         { "company.panNumber": parsed.payload.company.panNumber },
+        { "contact.email": parsed.payload.contact.email },
         ...(parsed.payload.company.reraNumber ? [{ "company.reraNumber": parsed.payload.company.reraNumber }] : []),
       ],
       status: { $nin: ["rejected"] },
@@ -115,12 +120,12 @@ router.post("/", submitLimiter, async (req, res) => {
     } catch (emailError) {
       console.error("Channel partner registration email failed:", emailError.message);
     }
-    return res.status(201).json({ message: "Channel partner registered successfully", emailSent, application: publicReceipt(partner, partnerCode) });
+    return res.status(201).json({ message: "Channel partner registered successfully", emailSent, token: createPartnerToken(partner), application: publicReceipt(partner, partnerCode) });
   } catch (error) {
     if (error.code === 11000 && error.keyPattern?.idempotencyKey) {
       const key = crypto.createHash("sha256").update(clean(req.get("Idempotency-Key"), 160)).digest("hex");
       const existing = await ChannelPartner.findOne({ idempotencyKey: key }).select("+partnerCodeEncrypted");
-      if (existing) return res.status(200).json({ message: "Channel partner already registered", application: publicReceipt(existing, existing.partnerCodeEncrypted ? decryptSensitive(existing.partnerCodeEncrypted) : "") });
+      if (existing) return res.status(200).json({ message: "Channel partner already registered", token: createPartnerToken(existing), application: publicReceipt(existing, existing.partnerCodeEncrypted ? decryptSensitive(existing.partnerCodeEncrypted) : "") });
     }
     if (error.code === "ENCRYPTION_NOT_CONFIGURED") return res.status(503).json({ error: "Application service is not configured" });
     console.error("Create channel partner error:", error);
@@ -229,6 +234,7 @@ router.patch("/:id/status", auth, adminOnly, async (req, res) => {
     partner.reviewedAt = new Date();
     if (nextStatus === "approved" || nextStatus === "active") partner.approvedAt = new Date();
     if (nextStatus === "rejected") partner.rejectedAt = new Date();
+    if (nextStatus === "suspended" || nextStatus === "rejected") partner.sessionVersion = (partner.sessionVersion || 0) + 1;
     partner.reviewHistory.push({ fromStatus: oldStatus, toStatus: nextStatus, note, adminId: req.user._id });
     await partner.save();
     let emailSent = false;
@@ -266,6 +272,39 @@ router.post("/:id/notes", auth, adminOnly, async (req, res) => {
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Channel partner application not found" });
     return res.status(500).json({ error: "Unable to add internal note" });
+  }
+});
+
+router.delete("/:id", auth, adminOnly, async (req, res) => {
+  try {
+    const partner = await ChannelPartner.findById(req.params.id);
+    if (!partner) return res.status(404).json({ error: "Channel partner application not found" });
+
+    const clients = await ChannelPartnerClient.find({ partnerId: partner._id }).select("_id").lean();
+    const clientIds = clients.map((client) => client._id);
+    const clashConditions = [
+      { attemptingPartnerId: partner._id },
+      { owningPartnerId: partner._id },
+    ];
+    if (clientIds.length) clashConditions.push({ owningClientId: { $in: clientIds } });
+
+    const clashResult = await ChannelPartnerClientClash.deleteMany({ $or: clashConditions });
+    const clientResult = await ChannelPartnerClient.deleteMany({ partnerId: partner._id });
+    await ChannelPartnerRecovery.deleteMany({ partnerId: partner._id });
+    await partner.deleteOne();
+
+    return res.json({
+      message: "Channel partner deleted successfully. The partner can register again.",
+      deleted: {
+        partners: 1,
+        clients: clientResult.deletedCount || 0,
+        clashes: clashResult.deletedCount || 0,
+      },
+    });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Channel partner application not found" });
+    console.error("Delete channel partner error:", error);
+    return res.status(500).json({ error: "Unable to delete channel partner" });
   }
 });
 

@@ -24,9 +24,11 @@ const noteSchema = new mongoose.Schema({
 
 const channelPartnerSchema = new mongoose.Schema({
   applicationNumber: { type: String, required: true, unique: true, immutable: true, index: true },
-  partnerCodeHash: { type: String, required: true, unique: true, sparse: true, immutable: true, select: false },
-  partnerCodeEncrypted: { type: String, required: true, immutable: true, select: false },
-  partnerCodeLast4: { type: String, required: true, immutable: true },
+  partnerCodeHash: { type: String, required: true, unique: true, sparse: true, select: false },
+  partnerCodeEncrypted: { type: String, required: true, select: false },
+  partnerCodeLast4: { type: String, required: true },
+  sessionVersion: { type: Number, default: 0, min: 0 },
+  codeRotatedAt: { type: Date, default: null },
   activatedAt: { type: Date, required: true, default: Date.now },
   idempotencyKey: { type: String, unique: true, sparse: true, select: false },
   partnerType: { type: String, enum: ["company", "individual"], default: "company", required: true },

@@ -29,6 +29,10 @@ function validApplication(overrides = {}) {
 }
 
 describe("Channel partners API", () => {
+  beforeEach(() => {
+    delete process.env.RESEND_API_KEY;
+  });
+
   afterEach(() => {
     delete process.env.RESEND_API_KEY;
     jest.restoreAllMocks();
@@ -158,6 +162,57 @@ describe("Channel partners API", () => {
     expect(JSON.stringify(res.body)).not.toContain("123456789012");
   });
 
+  it("lets only an admin delete a partner, clears related records, and permits registration again", async () => {
+    const created = await request(app)
+      .post("/api/channel-partners")
+      .set("Idempotency-Key", "delete-and-register-again")
+      .send(validApplication());
+    const partner = await ChannelPartner.findOne();
+    const project = await Property.create({ title: "ClearTitle Delete Test", published: true, status: "approved" });
+    const client = await ChannelPartnerClient.create({
+      leadNumber: "CTL-2026-999991",
+      partnerId: partner._id,
+      partnerCodeLast4: created.body.application.partnerCode.slice(-4),
+      clientName: "Delete Test Client",
+      mobileEncrypted: "encrypted-mobile",
+      mobileHash: "delete-test-mobile-hash",
+      mobileLast4: "1111",
+      projectId: project._id,
+      projectTitle: project.title,
+      consentAcceptedAt: new Date(),
+      ownershipExpiresAt: new Date(Date.now() + 86_400_000),
+    });
+    await ChannelPartnerClientClash.create({
+      attemptingPartnerId: partner._id,
+      owningPartnerId: partner._id,
+      owningClientId: client._id,
+      mobileHash: "delete-test-mobile-hash",
+      mobileLast4: "1111",
+      clientName: client.clientName,
+      projectId: project._id,
+      projectTitle: project.title,
+    });
+
+    expect((await request(app).delete(`/api/channel-partners/${partner._id}`)).status).toBe(401);
+    const user = await createUserToken();
+    expect((await request(app).delete(`/api/channel-partners/${partner._id}`).set("Authorization", `Bearer ${user.token}`)).status).toBe(403);
+
+    const admin = await createAdminToken();
+    const deleted = await request(app).delete(`/api/channel-partners/${partner._id}`).set("Authorization", `Bearer ${admin.token}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.deleted).toEqual({ partners: 1, clients: 1, clashes: 1 });
+    expect(await ChannelPartner.countDocuments()).toBe(0);
+    expect(await ChannelPartnerClient.countDocuments()).toBe(0);
+    expect(await ChannelPartnerClientClash.countDocuments()).toBe(0);
+
+    const registeredAgain = await request(app)
+      .post("/api/channel-partners")
+      .set("Idempotency-Key", "delete-and-register-again")
+      .send(validApplication());
+    expect(registeredAgain.status).toBe(201);
+    expect(registeredAgain.body.application.applicationNumber).not.toBe(created.body.application.applicationNumber);
+  });
+
   it("activates immediately and allows an admin to suspend, restore, and read decrypted details", async () => {
     await request(app).post("/api/channel-partners").send(validApplication());
     const partner = await ChannelPartner.findOne();
@@ -172,6 +227,50 @@ describe("Channel partners API", () => {
     expect(detail.body.partner.bank.accountNumber).toBe("123456789012");
     expect(detail.body.partner.partnerCode).toMatch(/^CT-\d{4,}$/);
     expect(detail.body.partner.reviewHistory).toHaveLength(3);
+  });
+
+  it("starts a dashboard session after registration and replaces a forgotten code after email OTP verification", async () => {
+    const created = await request(app).post("/api/channel-partners").send(validApplication());
+    expect(created.status).toBe(201);
+    expect(created.body.token).toEqual(expect.any(String));
+    const oldCode = created.body.application.partnerCode;
+    const oldToken = created.body.token;
+
+    const initialDashboard = await request(app)
+      .get("/api/channel-partner-leads/mine/dashboard")
+      .set("Authorization", `Bearer ${oldToken}`);
+    expect(initialDashboard.status).toBe(200);
+
+    process.env.RESEND_API_KEY = "test-resend-key";
+    const emailRequest = jest.spyOn(global, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: "email-id" }) });
+    const requested = await request(app).post("/api/channel-partner-auth/forgot-code").send({ email: "ASHA@EXAMPLE.COM" });
+    expect(requested.status).toBe(200);
+    expect(requested.body.message).toContain("OTP sent");
+    const otpEmail = JSON.parse(emailRequest.mock.calls[0][1].body);
+    const otp = otpEmail.html.match(/letter-spacing:5px[^>]*>(\d{6})<\/div>/)?.[1];
+    expect(otp).toMatch(/^\d{6}$/);
+
+    const incorrect = await request(app).post("/api/channel-partner-auth/verify-otp").send({ email: "asha@example.com", otp: "000000" });
+    expect(incorrect.status).toBe(400);
+    expect(incorrect.body.attemptsRemaining).toBe(4);
+
+    const verified = await request(app).post("/api/channel-partner-auth/verify-otp").send({ email: "asha@example.com", otp });
+    expect(verified.status).toBe(200);
+    expect(verified.body.message).toContain("new Channel Partner code");
+    expect(emailRequest).toHaveBeenCalledTimes(2);
+    const replacementEmail = JSON.parse(emailRequest.mock.calls[1][1].body);
+    const newCode = replacementEmail.html.match(/CT-\d{4,}/)?.[0];
+    expect(newCode).toMatch(/^CT-\d{4,}$/);
+    expect(newCode).not.toBe(oldCode);
+
+    expect((await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: oldCode })).status).toBe(401);
+    expect((await request(app).get("/api/channel-partner-leads/mine/dashboard").set("Authorization", `Bearer ${oldToken}`)).status).toBe(401);
+    const newSession = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: newCode });
+    expect(newSession.status).toBe(200);
+
+    const unknown = await request(app).post("/api/channel-partner-auth/forgot-code").send({ email: "not-registered@example.com" });
+    expect(unknown.status).toBe(404);
+    expect(unknown.body).toMatchObject({ error: "This email is not registered as a Channel Partner.", registrationUrl: "/channel-partner" });
   });
 
   it("keeps the admin detail usable when legacy encrypted values cannot be decrypted", async () => {
@@ -315,6 +414,9 @@ describe("Channel partners API", () => {
       "Alert: Client Already Registered",
       "Alert: Another Channel Partner Attempted to Register Your Client",
     ]));
+    const clientConfirmationEmail = sentEmails.find((email) => email.subject.startsWith("Client Registration Confirmed - CTL-"));
+    expect(clientConfirmationEmail.html).toContain("Open CP Dashboard");
+    expect(clientConfirmationEmail.html).toContain("/cp-dashboard");
     expect(sentEmails.filter((email) => email.to[0] === "asha@example.com")).toHaveLength(4);
     expect(sentEmails.filter((email) => email.to[0] === "second@example.com")).toHaveLength(1);
     const samePartnerEmail = sentEmails.find((email) => email.subject === "Alert: Client Already Registered" && email.to[0] === "asha@example.com");
