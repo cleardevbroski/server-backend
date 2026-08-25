@@ -65,6 +65,28 @@ describe("Property status workflow", () => {
     expect(reject.body.property.status).toBe("rejected");
   });
 
+  it("lets admins save incomplete listings as pending and keeps them private", async () => {
+    const { token } = await createAdminToken();
+    const created = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ title: "Incomplete Apartment", propertyType: "Apartment", configurationDetails: [{ configuration: "2 BHK" }], status: "pending", published: false });
+    expect(created.status).toBe(201);
+    expect(created.body.property.status).toBe("pending");
+    expect(created.body.property.published).toBe(false);
+
+    const publicResponse = await request(app).get(`/api/properties/${created.body.property.id}`);
+    expect(publicResponse.status).toBe(404);
+
+    const published = await request(app)
+      .put(`/api/properties/${created.body.property.id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ status: "approved", published: true });
+    expect(published.status).toBe(200);
+    expect(published.body.property.status).toBe("approved");
+    expect(published.body.property.published).toBe(true);
+  });
+
   it("rejects invalid status values", async () => {
     const { token } = await createAdminToken();
     const p = await Property.create({ title: "P", price: "1" });

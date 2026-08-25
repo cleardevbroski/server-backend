@@ -834,11 +834,13 @@ router.post(
   adminOnly,
   async (req, res) => {
     try {
-      const normalizedBody = prepareSubmittedPropertyPayload(req.body);
+      const savePending = req.body.status === "pending" || req.body.published === false;
+      const normalizedBody = savePending ? prepareOptionalPropertyPayload(req.body) : prepareSubmittedPropertyPayload(req.body);
       const hasTitle = typeof normalizedBody.title === "string" && Boolean(normalizedBody.title.trim());
       const propertyData = withMediaLedger({
         ...(await convertPropertyMedia(normalizedBody)),
-        ...(!hasTitle ? { status: "pending", published: false } : {}),
+        status: savePending || !hasTitle ? "pending" : "approved",
+        published: !(savePending || !hasTitle),
         postedBy: req.user._id,
         postedDate: new Date().toISOString(),
       });
@@ -877,10 +879,11 @@ router.put(
         builderId: existing.builderId,
       };
 
+      const savePending = req.body.status === "pending" || req.body.published === false;
       const normalizedUpdates = preserveMediaOnImplicitClear(
         req.body,
         existing,
-        prepareSubmittedPropertyPayload(req.body, existing)
+        savePending ? prepareOptionalPropertyPayload(req.body) : prepareSubmittedPropertyPayload(req.body, existing)
       );
       const updates = await convertPropertyMedia(includeAdminWorkflowFields(normalizedUpdates, req.body));
       existing.set(withMediaLedger(updates, existing));
