@@ -57,6 +57,16 @@ describe("Apartment property workflow", () => {
     expect(res.body.property.possession).toBe("Under Construction");
   });
 
+  it("allows approval when Apartment facing is not yet available", async () => {
+    const { token } = await createAdminToken();
+    const payload = apartment();
+    payload.configurationDetails.forEach((row) => { row.facings = []; });
+    const res = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(payload);
+    expect(res.status).toBe(201);
+    expect(res.body.property.configurationDetails.every((row) => row.facings.length === 0)).toBe(true);
+    expect(res.body.property.facing).toBe("");
+  });
+
   it("persists interactive floor-plan rooms and structured facilities", async () => {
     const { token } = await createAdminToken();
     const payload = apartment();
@@ -130,12 +140,14 @@ describe("Apartment property workflow", () => {
       .send(apartment({
         heroImages,
         developerLogoUrl: "https://cdn.example.com/developer-logo.png",
+        developerDescription: "Prestige Group is an established developer known for residential communities across Bengaluru.",
         localityMapImageUrl: "https://cdn.example.com/locality-map.jpg",
       }));
 
     expect(created.status).toBe(201);
     expect(created.body.property.heroImages).toEqual(heroImages);
     expect(created.body.property.developerLogoUrl).toContain("developer-logo.png");
+    expect(created.body.property.developerDescription).toContain("established developer");
     expect(created.body.property.localityMapImageUrl).toContain("locality-map.jpg");
 
     const rejected = await request(app)

@@ -430,9 +430,9 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
 
   const rows = payload.configurationDetails.map((row, index) => {
     const configuration = normalizeConfiguration(row.configuration);
-    const facings = Array.isArray(row.facings) ? [...new Set(row.facings.map((v) => String(v).trim()))] : [];
-    if (facings.length === 0 || facings.some((facing) => !FACING_OPTIONS.has(facing))) {
-      throw new PropertyPayloadError(`Configuration ${index + 1} must include valid facing options`);
+    const facings = Array.isArray(row.facings) ? [...new Set(row.facings.map((v) => String(v).trim()).filter(Boolean))] : [];
+    if (facings.some((facing) => !FACING_OPTIONS.has(facing))) {
+      throw new PropertyPayloadError(`Configuration ${index + 1} contains invalid facing options`);
     }
     return {
       id: String(row.id || `${configuration}-${index + 1}`).trim(),
@@ -519,7 +519,7 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   payload.area = deriveRange(rows, "builtUpArea") || deriveRange(rows, "superBuiltUpArea") || deriveRange(rows, "carpetArea") || payload.area;
   payload.bedrooms = Math.min(...rows.map((row) => row.bedrooms));
   payload.bathrooms = Math.min(...rows.map((row) => row.bathrooms));
-  payload.facing = rows[0].facings.join(", ");
+  payload.facing = rows.find((row) => row.facings.length)?.facings.join(", ") || "";
   return payload;
 }
 
@@ -601,7 +601,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   if (tags.length !== rows.length || tags.some((tag, index) => tag !== rows[index].configuration)) {
     throw new PropertyPayloadError("Configuration tags and Villa detail rows must match in the same order");
   }
-  if (details.plotFacing && !FACING_OPTIONS.has(details.plotFacing)) throw new PropertyPayloadError("A valid Villa plot facing is required");
+  if (details.plotFacing && !FACING_OPTIONS.has(details.plotFacing)) throw new PropertyPayloadError("Villa plot facing is invalid");
 
   const possession = payload.possessionDetails;
   if (!possession || !VILLA_POSSESSION_STATUSES.has(possession.status)) {
@@ -721,9 +721,9 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
     if (!Number.isFinite(pricePerSqft) || pricePerSqft <= 0) {
       throw new PropertyPayloadError(`${size.plotSize} price per sqft must be a positive number`);
     }
-    const facings = Array.isArray(row.facings) ? [...new Set(row.facings.map((value) => String(value).trim()))] : [];
-    if (!facings.length || facings.some((facing) => !FACING_OPTIONS.has(facing))) {
-      throw new PropertyPayloadError(`${size.plotSize} must include valid facing options`);
+    const facings = Array.isArray(row.facings) ? [...new Set(row.facings.map((value) => String(value).trim()).filter(Boolean))] : [];
+    if (facings.some((facing) => !FACING_OPTIONS.has(facing))) {
+      throw new PropertyPayloadError(`${size.plotSize} contains invalid facing options`);
     }
     return { ...size, pricePerSqft, totalPrice: Math.round(size.areaSqft * pricePerSqft), facings };
   });
@@ -746,9 +746,10 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
     seenPlotNumbers.add(key);
     const plotSize = normalizePlotSize(item.plotSize).plotSize;
     if (!validSizes.has(plotSize)) throw new PropertyPayloadError(`Plot ${plotNumber} uses a plot size that is not listed above`);
-    if (!FACING_OPTIONS.has(item.facing)) throw new PropertyPayloadError(`Plot ${plotNumber} must have a valid facing`);
+    const facing = String(item.facing || "").trim();
+    if (facing && !FACING_OPTIONS.has(facing)) throw new PropertyPayloadError(`Plot ${plotNumber} must have a valid facing when one is provided`);
     if (!PLOT_INVENTORY_STATUSES.has(item.status)) throw new PropertyPayloadError(`Plot ${plotNumber} must have a valid inventory status`);
-    return { plotNumber, plotSize, facing: item.facing, status: item.status, isCorner: requireBoolean(item.isCorner, `Plot ${plotNumber} corner flag`) };
+    return { plotNumber, plotSize, facing: facing || undefined, status: item.status, isCorner: requireBoolean(item.isCorner, `Plot ${plotNumber} corner flag`) };
   });
   const approvalAuthority = requireText(details.approvalAuthority, "Layout approval authority").slice(0, 120);
   if (!PLOT_APPROVAL_AUTHORITIES.has(approvalAuthority) && approvalAuthority.length < 2) {
@@ -816,7 +817,7 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
   payload.area = rows.length === 1 ? `${rows[0].areaSqft} sqft` : `${Math.min(...rows.map((row) => row.areaSqft))} - ${Math.max(...rows.map((row) => row.areaSqft))} sqft`;
   payload.bedrooms = undefined;
   payload.bathrooms = undefined;
-  payload.facing = rows[0].facings.join(", ");
+  payload.facing = rows.find((row) => row.facings.length)?.facings.join(", ") || "";
   payload.possession = layoutPossession.status;
   payload.ageOfProperty = underDevelopment ? "Under Construction" : "";
   const badges = Array.isArray(payload.badges) ? payload.badges.filter((badge) => badge !== "Corner Plot") : [];

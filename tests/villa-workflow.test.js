@@ -72,6 +72,16 @@ describe("Villa property workflow", () => {
     expect(res.body.property.villaDetails.numberOfFloors).toBe("G+2");
   });
 
+  it("allows approval when Villa facing is not yet available", async () => {
+    const { token } = await createAdminToken();
+    const payload = villa();
+    delete payload.villaDetails.plotFacing;
+    const res = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(payload);
+    expect(res.status).toBe(201);
+    expect(res.body.property.villaDetails.plotFacing).toBeUndefined();
+    expect(res.body.property.facing).toBe("");
+  });
+
   it("accepts repeated BHK configurations", async () => {
     const { token } = await createAdminToken();
     const repeatedRow = {

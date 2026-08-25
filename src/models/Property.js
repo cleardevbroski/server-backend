@@ -370,6 +370,7 @@ const propertySchema = new mongoose.Schema(
     possessionDetails: { type: possessionDetailsSchema, default: undefined },
     builder: { type: String, default: "" },
     developerLogoUrl: { type: String, default: "", trim: true },
+    developerDescription: { type: String, default: "", trim: true, maxlength: 3000 },
     localityMapImageUrl: { type: String, default: "", trim: true },
     image: { type: String, default: "" },
     badges: [{ type: String }],

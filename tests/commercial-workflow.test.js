@@ -14,6 +14,7 @@ describe("Commercial property workflow", () => {
     expect(res.body.property.commercialDetails.commercialSubtype).toBe("Office Space");
     expect(res.body.property.area).toBe("2400 sqft");
     expect(res.body.property.configs).toEqual(["Office Space"]);
+    expect(res.body.property.facing || "").toBe("");
   });
   it("requires frontage for a shop/showroom", async () => {
     const { token } = await createAdminToken();

@@ -49,6 +49,18 @@ describe("Plot property workflow", () => {
     expect(res.body.property.badges).toContain("Corner Plot");
   });
 
+  it("allows approval when Plot facing is not yet available", async () => {
+    const { token } = await createAdminToken();
+    const payload = plot();
+    payload.plotDetails.plotSizeDetails.forEach((row) => { row.facings = []; });
+    payload.plotDetails.inventory.forEach((item) => { delete item.facing; });
+    const res = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(payload);
+    expect(res.status).toBe(201);
+    expect(res.body.property.plotDetails.plotSizeDetails.every((row) => row.facings.length === 0)).toBe(true);
+    expect(res.body.property.plotDetails.inventory.every((item) => !item.facing)).toBe(true);
+    expect(res.body.property.facing).toBe("");
+  });
+
   it("requires matching size tags, exact inventory count, and a layout map", async () => {
     const { token } = await createAdminToken();
     const mismatch = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(plot({ configs: ["30 × 40"] }));
