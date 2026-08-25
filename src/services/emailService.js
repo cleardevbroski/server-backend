@@ -1,5 +1,24 @@
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
 
+const EMAIL_ADDRESS = "[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+";
+const BARE_EMAIL_FROM = new RegExp(`^${EMAIL_ADDRESS}$`, "i");
+const NAMED_EMAIL_FROM = new RegExp(`^[^<>\\r\\n]+\\s+<${EMAIL_ADDRESS}>$`, "i");
+const DEFAULT_EMAIL_FROM = "ClearTitle One <onboarding@resend.dev>";
+
+function normalizeEmailFrom(value) {
+  let candidate = String(value || "").trim();
+  if ((candidate.startsWith('"') && candidate.endsWith('"')) || (candidate.startsWith("'") && candidate.endsWith("'"))) {
+    candidate = candidate.slice(1, -1).trim();
+  }
+  return BARE_EMAIL_FROM.test(candidate) || NAMED_EMAIL_FROM.test(candidate) ? candidate : "";
+}
+
+function resolveEmailFrom(preferred) {
+  return [preferred, process.env.CHANNEL_PARTNER_EMAIL_FROM, process.env.PASSWORD_RESET_FROM, DEFAULT_EMAIL_FROM]
+    .map(normalizeEmailFrom)
+    .find(Boolean) || DEFAULT_EMAIL_FROM;
+}
+
 async function sendEmail({ to, subject, html, from }) {
   if (!to) throw new Error("Email recipient is required");
   if (!process.env.RESEND_API_KEY) {
@@ -14,7 +33,7 @@ async function sendEmail({ to, subject, html, from }) {
     method: "POST",
     headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      from: from || process.env.CHANNEL_PARTNER_EMAIL_FROM || process.env.PASSWORD_RESET_FROM || "ClearTitle One <onboarding@resend.dev>",
+      from: resolveEmailFrom(from),
       to: [to], subject, html,
       ...(process.env.CHANNEL_PARTNER_REPLY_TO ? { reply_to: process.env.CHANNEL_PARTNER_REPLY_TO } : {}),
     }),

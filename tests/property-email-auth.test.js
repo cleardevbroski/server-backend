@@ -31,6 +31,28 @@ async function createPrivateDocument(accountId, purpose, index) {
 }
 
 describe("email-authenticated property posting", () => {
+  it("falls back to the verified channel sender when PROPERTY_EMAIL_FROM is malformed", async () => {
+    const previousPropertyFrom = process.env.PROPERTY_EMAIL_FROM;
+    const previousChannelFrom = process.env.CHANNEL_PARTNER_EMAIL_FROM;
+    process.env.RESEND_API_KEY = "test-resend-key";
+    process.env.PROPERTY_EMAIL_FROM = "ClearTitle One partners@cleartitleone.com";
+    process.env.CHANNEL_PARTNER_EMAIL_FROM = "ClearTitle One <partners@cleartitleone.com>";
+    const emailRequest = jest.spyOn(global, "fetch").mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: "property-email-id" }) });
+
+    try {
+      const requested = await request(app).post("/api/property-auth/request-otp").send({ email: "sender-fallback@propertymail.in" });
+      expect(requested.status).toBe(200);
+      const email = JSON.parse(emailRequest.mock.calls[0][1].body);
+      expect(email.from).toBe("ClearTitle One <partners@cleartitleone.com>");
+    } finally {
+      emailRequest.mockRestore();
+      if (previousPropertyFrom === undefined) delete process.env.PROPERTY_EMAIL_FROM;
+      else process.env.PROPERTY_EMAIL_FROM = previousPropertyFrom;
+      if (previousChannelFrom === undefined) delete process.env.CHANNEL_PARTNER_EMAIL_FROM;
+      else process.env.CHANNEL_PARTNER_EMAIL_FROM = previousChannelFrom;
+    }
+  });
+
   it("verifies email, creates an isolated account and restores it through /auth/me", async () => {
     const session = await verifyPropertyEmail();
     expect(await PropertyPosterAccount.countDocuments({ email: "owner@propertymail.in" })).toBe(1);
