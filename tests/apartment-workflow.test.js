@@ -127,6 +127,42 @@ describe("Apartment property workflow", () => {
     expect(publicResult.body.property.faqs[0].question).toBe("Where is the project?");
   });
 
+  it("accepts property documents through 50 MB and rejects larger metadata", async () => {
+    const { token } = await createAdminToken();
+    const reraDocument = (fileSize) => ({
+      key: "registration-certificate",
+      label: "Registration Certificate",
+      annexure: "Annexure 1",
+      fileName: "registration.pdf",
+      fileUrl: "https://res.cloudinary.com/demo/raw/upload/registration.pdf",
+      mimeType: "application/pdf",
+      fileSize,
+    });
+    const projectDownload = (fileSize) => ({
+      kind: "master-plan",
+      label: "Master Plan",
+      fileName: "master-plan.pdf",
+      fileUrl: "https://res.cloudinary.com/demo/raw/upload/master-plan.pdf",
+      mimeType: "application/pdf",
+      fileSize,
+    });
+    const withDocuments = (reraNumber, fileSize) => apartment({
+      reraRegistered: true,
+      reraNumber,
+      reraPhases: [{ name: "Phase 1", reraNumber, reraDocuments: [reraDocument(fileSize)], projectDocuments: [] }],
+      projectDownloads: [projectDownload(fileSize)],
+    });
+
+    const accepted = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(withDocuments("PRM/KA/RERA/LIMIT5000", 50 * 1024 * 1024));
+    expect(accepted.status).toBe(201);
+    expect(accepted.body.property.reraPhases[0].reraDocuments[0].fileSize).toBe(50 * 1024 * 1024);
+    expect(accepted.body.property.projectDownloads[0].fileSize).toBe(50 * 1024 * 1024);
+
+    const rejected = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(withDocuments("PRM/KA/RERA/LIMIT5001", 50 * 1024 * 1024 + 1));
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/50 MB/i);
+  });
+
   it("persists at most three ordered Project Overview photos", async () => {
     const { token } = await createAdminToken();
     const heroImages = [

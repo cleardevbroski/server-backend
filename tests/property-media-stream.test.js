@@ -73,11 +73,12 @@ describe("streamed property media upload", () => {
     expect(res.body.error).toMatch(/does not match/i);
   });
 
-  it("rejects a declared payload larger than the kind limit before streaming", async () => {
+  it("rejects a declared property image larger than the 50 MB limit before streaming", async () => {
     const res = await request(app)
       .post("/api/property-media?kind=image")
       .set("Content-Type", "image/png")
-      .set("Content-Length", String(5 * 1024 * 1024 + 1));
+      .set("Content-Length", String(50 * 1024 * 1024 + 1));
     expect(res.status).toBe(413);
+    expect(res.body.error).toMatch(/50 MB/i);
   });
 });

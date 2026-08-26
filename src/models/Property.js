@@ -1,4 +1,5 @@
 const mongoose = require("mongoose");
+const { PROPERTY_DOCUMENT_MAX_BYTES } = require("../utils/propertyMediaLimits");
 
 const verificationDocumentRefSchema = new mongoose.Schema({
   document: { type: mongoose.Schema.Types.ObjectId, ref: "PropertyPosterDocument", required: true },
@@ -98,12 +99,16 @@ const facilityDetailSchema = new mongoose.Schema(
 const villaConfigurationDetailSchema = new mongoose.Schema(
   {
     configuration: { type: String, trim: true },
+    bhk: { type: String, default: "", trim: true },
+    unitVariant: { type: String, enum: ["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Custom"] },
     price: { type: String, trim: true },
     plotArea: { type: String, trim: true },
     builtUpArea: { type: String, trim: true },
+    carpetArea: { type: String, default: "", trim: true },
     superArea: { type: String, trim: true },
     bedrooms: { type: Number, min: 1 },
     bathrooms: { type: Number, min: 1 },
+    balconies: { type: Number, min: 0 },
     plotDimensions: { type: String, default: "", trim: true },
     numberOfFloors: { type: String, default: "", trim: true },
     plotFacing: {
@@ -124,7 +129,7 @@ const villaConfigurationDetailSchema = new mongoose.Schema(
 
 const villaDetailsSchema = new mongoose.Schema(
   {
-    villaType: { type: String, enum: ["Independent", "Row Villa", "Twin Villa"] },
+    villaType: { type: String, enum: ["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Mixed Villa Development"] },
     configurationDetails: { type: [villaConfigurationDetailSchema] },
     plotDimensions: { type: String, default: "", trim: true },
     numberOfFloors: { type: String, default: "", trim: true },
@@ -280,7 +285,7 @@ const projectDownloadSchema = new mongoose.Schema({
   fileName: { type: String, required: true, trim: true, maxlength: 255 },
   fileUrl: { type: String, required: true, trim: true },
   mimeType: { type: String, enum: ["application/pdf", "video/mp4"], required: true },
-  fileSize: { type: Number, min: 1, max: 15 * 1024 * 1024 },
+  fileSize: { type: Number, min: 1, max: PROPERTY_DOCUMENT_MAX_BYTES },
 });
 
 const projectFaqSchema = new mongoose.Schema({
@@ -323,7 +328,7 @@ const reraDocumentSchema = new mongoose.Schema({
   fileName: { type: String, required: true, trim: true },
   fileUrl: { type: String, required: true, trim: true },
   mimeType: { type: String, enum: ["application/pdf", "image/jpeg", "image/png"], required: true },
-  fileSize: { type: Number, min: 1, max: 15 * 1024 * 1024 },
+  fileSize: { type: Number, min: 1, max: PROPERTY_DOCUMENT_MAX_BYTES },
   uploadedAt: { type: Date, default: Date.now },
 });
 

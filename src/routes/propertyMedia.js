@@ -5,52 +5,57 @@ const adminOnly = require("../middleware/adminOnly");
 const propertySubmitterOnly = require("../middleware/propertySubmitterOnly");
 const PropertyPosterDocument = require("../models/PropertyPosterDocument");
 const { PURPOSES } = require("../models/PropertyPosterDocument");
+const {
+  PROPERTY_IMAGE_MAX_BYTES,
+  PROPERTY_DOCUMENT_MAX_BYTES,
+  PROPERTY_WALKTHROUGH_MAX_BYTES,
+} = require("../utils/propertyMediaLimits");
 
 const router = express.Router();
 
 const KINDS = {
   image: {
     mime: new Set(["image/jpeg", "image/png", "image/webp"]),
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: PROPERTY_IMAGE_MAX_BYTES,
     resourceType: "image",
     folder: "clear-title/properties",
   },
   brochure: {
     mime: new Set(["application/pdf"]),
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "raw",
     folder: "clear-title/properties/brochures",
   },
   "project-document-pdf": {
     mime: new Set(["application/pdf"]),
-    maxBytes: 15 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "raw",
     folder: "clear-title/properties/project-downloads",
     requiresAuth: true,
   },
   "project-document-image": {
     mime: new Set(["image/jpeg", "image/png"]),
-    maxBytes: 15 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "image",
     folder: "clear-title/properties/project-downloads",
     requiresAuth: true,
   },
   "project-walkthrough": {
     mime: new Set(["video/mp4"]),
-    maxBytes: 15 * 1024 * 1024,
+    maxBytes: PROPERTY_WALKTHROUGH_MAX_BYTES,
     resourceType: "video",
     folder: "clear-title/properties/project-downloads",
     requiresAuth: true,
   },
   "layout-map-image": {
     mime: new Set(["image/jpeg", "image/png", "image/webp"]),
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "image",
     folder: "clear-title/properties/layout-maps",
   },
   "layout-map-pdf": {
     mime: new Set(["application/pdf"]),
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "raw",
     folder: "clear-title/properties/layout-maps",
   },
@@ -70,14 +75,14 @@ const KINDS = {
   },
   "rera-document-image": {
     mime: new Set(["image/jpeg", "image/png"]),
-    maxBytes: 15 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "image",
     folder: "clear-title/properties/rera-documents",
     requiresAuth: true,
   },
   "rera-document-pdf": {
     mime: new Set(["application/pdf"]),
-    maxBytes: 15 * 1024 * 1024,
+    maxBytes: PROPERTY_DOCUMENT_MAX_BYTES,
     resourceType: "raw",
     folder: "clear-title/properties/rera-documents",
     requiresAuth: true,

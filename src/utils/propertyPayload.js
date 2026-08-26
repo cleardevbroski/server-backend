@@ -1,3 +1,10 @@
+const {
+  PROPERTY_DOCUMENT_MAX_BYTES,
+  PROPERTY_DOCUMENT_MAX_MB,
+  PROPERTY_WALKTHROUGH_MAX_BYTES,
+  PROPERTY_WALKTHROUGH_MAX_MB,
+} = require("./propertyMediaLimits");
+
 const FACING_OPTIONS = new Set([
   "East",
   "West",
@@ -8,7 +15,8 @@ const FACING_OPTIONS = new Set([
   "South-East",
   "South-West",
 ]);
-const VILLA_TYPES = new Set(["Independent", "Row Villa", "Twin Villa"]);
+const VILLA_TYPES = new Set(["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Mixed Villa Development"]);
+const VILLA_UNIT_VARIANTS = new Set(["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Custom"]);
 const VILLA_POSSESSION_STATUSES = new Set(["Ready to Move", "Under Construction"]);
 const FURNISHING_OPTIONS = new Set(["Unfurnished", "Semi-Furnished", "Fully Furnished"]);
 const PLOT_APPROVAL_AUTHORITIES = new Set(["BMRDA", "BDA", "BBMP", "DTCP", "Panchayat", "MPA"]);
@@ -72,6 +80,44 @@ function normalizeConfiguration(value) {
   return `${Number(match[1])} BHK`;
 }
 
+function inferVillaUnitVariant(value) {
+  const normalized = String(value || "").toLowerCase();
+  if (/\btriplex\b/.test(normalized)) return "Triplex";
+  if (/\bduplex\b/.test(normalized)) return "Duplex";
+  if (/\bsimplex\b/.test(normalized)) return "Simplex";
+  if (/\bvillament\b/.test(normalized)) return "Villament";
+  if (/\bpent\s*house\b/.test(normalized)) return "Penthouse";
+  if (/\bsky\s*villa\b/.test(normalized)) return "Sky Villa";
+  if (/\b(row\s*(?:house|villa)|town\s*house)\b/.test(normalized)) return "Row House";
+  if (/\btwin\s*villa\b/.test(normalized)) return "Twin Villa";
+  if (/\bindependent\s*villa\b/.test(normalized)) return "Independent Villa";
+  return undefined;
+}
+
+function normalizeVillaBhk(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  const match = normalized.match(/^(\d+(?:\.5)?)\s*bhk$/i);
+  if (!match || Number(match[1]) < 1) throw new PropertyPayloadError("Villa BHK must use a positive label, for example 4 BHK");
+  return `${Number(match[1])} BHK`;
+}
+
+function normalizeVillaConfiguration(value) {
+  let configuration = String(value || "").trim().replace(/\s+/g, " ");
+  if (!configuration || configuration.length > 120 || /[\r\n]/.test(configuration)) {
+    throw new PropertyPayloadError("Villa configuration must be a label such as 4 BHK Duplex (G+1), Villament, or Penthouse");
+  }
+  const bhkMatch = configuration.match(/(\d+(?:\.5)?)\s*bhk\b/i);
+  const inferredVariant = inferVillaUnitVariant(configuration);
+  if (!bhkMatch && !inferredVariant) {
+    throw new PropertyPayloadError("Villa configuration must include a BHK or a recognized Villa variant");
+  }
+  if (bhkMatch) configuration = configuration.replace(bhkMatch[0], `${Number(bhkMatch[1])} BHK`);
+  return configuration
+    .replace(/pent\s*house/gi, "Penthouse")
+    .replace(/\(\s*(G\s*\+\s*\d+|\d+)\s*\)/gi, (_, structure) => `(${structure.replace(/\s+/g, "").toUpperCase()})`);
+}
+
 function requireText(value, label) {
   const normalized = String(value || "").trim();
   if (!normalized) throw new PropertyPayloadError(`${label} is required`);
@@ -125,6 +171,19 @@ function requirePositiveDisplay(value, label, field = "area") {
     throw new PropertyPayloadError(`${label} must contain a positive number`);
   }
   return normalized;
+}
+
+function optionalPositiveDisplay(value, label, field = "area") {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  const number = parseNumericDisplay(normalized, field);
+  if (!Number.isFinite(number) || number <= 0) throw new PropertyPayloadError(`${label} must contain a positive number`);
+  return normalized;
+}
+
+function optionalInteger(value, label, min) {
+  if (value === undefined || value === null || value === "") return undefined;
+  return requireInteger(value, label, min);
 }
 
 function optionalAssetUrl(value, label) {
@@ -261,8 +320,10 @@ function normalizeProjectContent(payload) {
       const expectedMime = kind === "walkthrough" ? "video/mp4" : "application/pdf";
       if (mimeType !== expectedMime) throw new PropertyPayloadError(`${kind} has an invalid file type`);
       const fileSize = Number(document.fileSize);
-      if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > 15 * 1024 * 1024) {
-        throw new PropertyPayloadError("Project downloads must be no larger than 15 MB");
+      const maxBytes = kind === "walkthrough" ? PROPERTY_WALKTHROUGH_MAX_BYTES : PROPERTY_DOCUMENT_MAX_BYTES;
+      const maxMb = kind === "walkthrough" ? PROPERTY_WALKTHROUGH_MAX_MB : PROPERTY_DOCUMENT_MAX_MB;
+      if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > maxBytes) {
+        throw new PropertyPayloadError(`${document.label || kind} must be no larger than ${maxMb} MB`);
       }
       return {
         ...(document._id ? { _id: document._id } : {}),
@@ -329,8 +390,8 @@ function normalizeReraDocuments(documents, allowed, groupLabel) {
       throw new PropertyPayloadError(`${label} must be a PDF, JPG, or PNG document`);
     }
     const fileSize = Number(document.fileSize);
-    if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > 15 * 1024 * 1024) {
-      throw new PropertyPayloadError(`${label} must be no larger than 15 MB`);
+    if (!Number.isFinite(fileSize) || fileSize < 1 || fileSize > PROPERTY_DOCUMENT_MAX_BYTES) {
+      throw new PropertyPayloadError(`${label} must be no larger than ${PROPERTY_DOCUMENT_MAX_MB} MB`);
     }
     return {
       ...(document._id ? { _id: document._id } : {}),
@@ -551,18 +612,27 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     throw new PropertyPayloadError("Villa details are required");
   }
   if (!VILLA_TYPES.has(details.villaType)) {
-    throw new PropertyPayloadError("Villa type must be Independent, Row Villa, or Twin Villa");
+    throw new PropertyPayloadError("Select a supported Villa type");
   }
   if (!Array.isArray(details.configurationDetails) || details.configurationDetails.length === 0) {
     throw new PropertyPayloadError("At least one Villa configuration is required");
   }
 
   const rows = details.configurationDetails.map((row) => {
-    const configuration = normalizeConfiguration(row.configuration);
-    const bedrooms = requireInteger(row.bedrooms, `${configuration} bedrooms`, 1);
-    const expectedBedrooms = Number(configuration.match(/^\d+/)[0]);
-    if (bedrooms !== expectedBedrooms) {
+    const configuration = normalizeVillaConfiguration(row.configuration);
+    const configurationBhk = configuration.match(/(\d+(?:\.5)?)\s*BHK\b/i)?.[0] || "";
+    const bhk = normalizeVillaBhk(row.bhk || configurationBhk);
+    const bedrooms = optionalInteger(row.bedrooms, `${configuration} bedrooms`, 1);
+    const expectedBedrooms = bhk ? Math.floor(Number(bhk.match(/^\d+(?:\.5)?/)[0])) : undefined;
+    if (bedrooms !== undefined && expectedBedrooms !== undefined && bedrooms !== expectedBedrooms) {
       throw new PropertyPayloadError(`${configuration} bedrooms must equal ${expectedBedrooms}`);
+    }
+    const bathrooms = optionalInteger(row.bathrooms, `${configuration} bathrooms`, 1);
+    const balconies = optionalInteger(row.balconies, `${configuration} balconies`, 0);
+    const inferredVariant = inferVillaUnitVariant(configuration);
+    const unitVariant = String(row.unitVariant || inferredVariant || "").trim();
+    if (unitVariant && !VILLA_UNIT_VARIANTS.has(unitVariant)) {
+      throw new PropertyPayloadError(`${configuration} unit variant is invalid`);
     }
     const rowFacing = String(row.plotFacing || "").trim();
     if (rowFacing && !FACING_OPTIONS.has(rowFacing)) {
@@ -575,14 +645,18 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     const privateGarden = Boolean(row.privateGarden);
     return {
       configuration,
-      price: requirePositiveDisplay(row.price, `${configuration} price`, "price"),
-      plotArea: requirePositiveDisplay(row.plotArea, `${configuration} plot area`),
-      builtUpArea: requirePositiveDisplay(row.builtUpArea, `${configuration} built-up area`),
-      superArea: requirePositiveDisplay(row.superArea, `${configuration} super area`),
+      bhk,
+      unitVariant: unitVariant || undefined,
+      price: optionalPositiveDisplay(row.price, `${configuration} price`, "price"),
+      plotArea: optionalPositiveDisplay(row.plotArea, `${configuration} plot area`),
+      builtUpArea: optionalPositiveDisplay(row.builtUpArea, `${configuration} built-up area`),
+      carpetArea: optionalPositiveDisplay(row.carpetArea, `${configuration} carpet area`),
+      superArea: optionalPositiveDisplay(row.superArea, `${configuration} super area`),
       bedrooms,
-      bathrooms: requireInteger(row.bathrooms, `${configuration} bathrooms`, 1),
+      bathrooms,
+      balconies,
       plotDimensions: normalizePlotDimensions(row.plotDimensions),
-      numberOfFloors: normalizeFloorCount(row.numberOfFloors),
+      numberOfFloors: normalizeFloorCount(row.numberOfFloors || configuration.match(/\((G\+\d+|\d+)\)/i)?.[1]),
       plotFacing: rowFacing || undefined,
       cornerPlot: Boolean(row.cornerPlot),
       roadWidthFacing: rowRoadWidth,
@@ -597,7 +671,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     };
   });
 
-  const tags = Array.isArray(payload.configs) ? payload.configs.map(normalizeConfiguration) : [];
+  const tags = Array.isArray(payload.configs) ? payload.configs.map(normalizeVillaConfiguration) : [];
   if (tags.length !== rows.length || tags.some((tag, index) => tag !== rows[index].configuration)) {
     throw new PropertyPayloadError("Configuration tags and Villa detail rows must match in the same order");
   }
@@ -644,7 +718,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     roadWidthFacing,
     privateGarden,
     privateGardenArea: privateGarden
-      ? requirePositiveDisplay(details.privateGardenArea, "Private garden area")
+      ? optionalPositiveDisplay(details.privateGardenArea, "Private garden area")
       : "",
     privatePool: Boolean(details.privatePool),
     terrace,
@@ -661,9 +735,11 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   payload.bookingAmount = undefined;
   payload.configs = rows.map((row) => row.configuration);
   payload.price = deriveRange(rows, "price") || payload.price;
-  payload.area = deriveRange(rows, "superArea") || deriveRange(rows, "builtUpArea") || payload.area;
-  payload.bedrooms = Math.min(...rows.map((row) => row.bedrooms));
-  payload.bathrooms = Math.min(...rows.map((row) => row.bathrooms));
+  payload.area = deriveRange(rows, "superArea") || deriveRange(rows, "builtUpArea") || deriveRange(rows, "carpetArea") || deriveRange(rows, "plotArea") || payload.area;
+  const bedroomValues = rows.flatMap((row) => row.bedrooms === undefined ? [] : [row.bedrooms]);
+  const bathroomValues = rows.flatMap((row) => row.bathrooms === undefined ? [] : [row.bathrooms]);
+  payload.bedrooms = bedroomValues.length ? Math.min(...bedroomValues) : payload.bedrooms;
+  payload.bathrooms = bathroomValues.length ? Math.min(...bathroomValues) : payload.bathrooms;
   payload.facing = rows.find((row) => row.plotFacing)?.plotFacing || details.plotFacing || "";
   payload.possessionDetails = {
     status: possession.status,

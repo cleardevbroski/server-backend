@@ -20,6 +20,7 @@ const {
 const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
 const { normalizePropertySubmissionProfile, PropertySubmissionProfileError } = require("../utils/propertySubmissionProfile");
 const { sendPropertySubmissionEmail } = require("../services/emailService");
+const { PROPERTY_DOCUMENT_MAX_BYTES, PROPERTY_WALKTHROUGH_MAX_BYTES } = require("../utils/propertyMediaLimits");
 
 const router = express.Router();
 const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
@@ -673,7 +674,7 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOrGuest
     const upstream = await fetch(source, { redirect: "error" });
     if (!upstream.ok) return res.status(502).json({ error: "Document is temporarily unavailable" });
     const bytes = Buffer.from(await upstream.arrayBuffer());
-    if (bytes.length > 15 * 1024 * 1024) return res.status(413).json({ error: "Document exceeds the download limit" });
+    if (bytes.length > PROPERTY_DOCUMENT_MAX_BYTES) return res.status(413).json({ error: "Document exceeds the download limit" });
 
     await Lead.create({
       type: "property_interest",
@@ -724,7 +725,8 @@ router.get("/:id/project-downloads/:documentId/download", auth, customerOrGuest,
     const upstream = await fetch(source, { redirect: "error" });
     if (!upstream.ok) return res.status(502).json({ error: "Document is temporarily unavailable" });
     const bytes = Buffer.from(await upstream.arrayBuffer());
-    if (bytes.length > 15 * 1024 * 1024) return res.status(413).json({ error: "Document exceeds the download limit" });
+    const maxDownloadBytes = document.kind === "walkthrough" ? PROPERTY_WALKTHROUGH_MAX_BYTES : PROPERTY_DOCUMENT_MAX_BYTES;
+    if (bytes.length > maxDownloadBytes) return res.status(413).json({ error: "Document exceeds the download limit" });
     await Lead.create({
       type: "property_interest",
       name: req.user.name,

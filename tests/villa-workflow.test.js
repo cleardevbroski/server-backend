@@ -100,6 +100,38 @@ describe("Villa property workflow", () => {
     expect(res.body.property.villaDetails.configurationDetails).toHaveLength(3);
   });
 
+  it("accepts rich Villa variants with optional measurements and room counts", async () => {
+    const { token } = await createAdminToken();
+    const payload = villa({ configs: ["4 BHK Duplex (G+1)", "Penthouse"] });
+    payload.villaDetails.villaType = "Mixed Villa Development";
+    payload.villaDetails.privateGarden = false;
+    payload.villaDetails.configurationDetails = [
+      {
+        configuration: "4 BHK Duplex (G + 1)",
+        bhk: "4 BHK",
+        unitVariant: "Duplex",
+        builtUpArea: "3009 Sq. Ft.",
+        carpetArea: "2443 Sq. Ft.",
+        superArea: "3009 Sq. Ft.",
+        bedrooms: 4,
+        bathrooms: 4,
+        balconies: 2,
+      },
+      { configuration: "Pent house", unitVariant: "Penthouse" },
+    ];
+    const res = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(201);
+    expect(res.body.property.configs).toEqual(["4 BHK Duplex (G+1)", "Penthouse"]);
+    expect(res.body.property.villaDetails.configurationDetails[0]).toMatchObject({
+      bhk: "4 BHK", unitVariant: "Duplex", carpetArea: "2443 Sq. Ft.", balconies: 2, numberOfFloors: "G+1",
+    });
+    expect(res.body.property.villaDetails.configurationDetails[1]).toMatchObject({ configuration: "Penthouse", unitVariant: "Penthouse" });
+  });
+
   it("rejects mismatched tags and rows", async () => {
     const { token } = await createAdminToken();
     const res = await request(app)
@@ -145,14 +177,19 @@ describe("Villa property workflow", () => {
     expect(res.body.error).toMatch(/Ready Since date/i);
   });
 
-  it("requires and clears conditional garden data", async () => {
+  it("allows an omitted garden area, validates supplied values, and clears it when disabled", async () => {
     const { token } = await createAdminToken();
     const missing = villa();
     missing.villaDetails.privateGardenArea = "";
-    const invalid = await request(app)
+    const optional = await request(app)
       .post("/api/properties")
       .set("Authorization", `Bearer ${token}`)
       .send(missing);
+    expect(optional.status).toBe(201);
+
+    const suppliedInvalid = villa();
+    suppliedInvalid.villaDetails.privateGardenArea = "unknown";
+    const invalid = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(suppliedInvalid);
     expect(invalid.status).toBe(400);
     expect(invalid.body.error).toMatch(/garden area/i);
 

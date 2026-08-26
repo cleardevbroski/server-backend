@@ -65,8 +65,8 @@ app.use(
   rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many document uploads. Please try again later." } }),
   require("./routes/channelPartnerMedia")
 );
-// 10mb: allows base64 image payloads (<=5MB each) while staying under MongoDB's
-// 16MB BSON document limit and capping storage/bandwidth abuse on public routes.
+// Keep legacy JSON/base64 payloads small. Property images and documents up to
+// 50 MB use the streamed /api/property-media route above and never enter JSON.
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true }));
 
