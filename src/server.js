@@ -1,11 +1,17 @@
 const app = require("./app");
 const connectDB = require("./config/db");
 const { expireChannelPartnerClients } = require("./services/channelPartnerClientExpiry");
+const { migratePendingProjectAreaUnits } = require("./services/pendingProjectAreaMigration");
 
 const PORT = process.env.PORT || 5000;
 
 async function start() {
   await connectDB();
+  await migratePendingProjectAreaUnits()
+    .then((result) => {
+      if (result.migratedCount) console.log(`Migrated ${result.migratedCount} pending project-area record(s) from legacy labels to square feet.`);
+    })
+    .catch((error) => console.error("Pending project-area migration failed:", error.message));
   await expireChannelPartnerClients().catch((error) => console.error("Initial Channel Partner client expiry failed:", error.message));
   const expiryTimer = setInterval(() => {
     expireChannelPartnerClients().catch((error) => console.error("Channel Partner client expiry failed:", error.message));

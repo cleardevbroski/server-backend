@@ -33,7 +33,7 @@ function villa(overrides = {}) {
         },
       ],
       plotDimensions: "40 ft x 60 ft",
-      numberOfFloors: "g + 2",
+      numberOfFloors: "Ground + 2 Floors",
       plotFacing: "East",
       cornerPlot: false,
       roadWidthFacing: "30 ft road",
@@ -130,6 +130,20 @@ describe("Villa property workflow", () => {
       bhk: "4 BHK", unitVariant: "Duplex", carpetArea: "2443 Sq. Ft.", balconies: 2, numberOfFloors: "G+1",
     });
     expect(res.body.property.villaDetails.configurationDetails[1]).toMatchObject({ configuration: "Penthouse", unitVariant: "Penthouse" });
+  });
+
+  it("supports Mansion projects and rejects resale-only projects", async () => {
+    const { token } = await createAdminToken();
+    const mansion = villa();
+    mansion.villaDetails.villaType = "Mansion";
+    mansion.villaDetails.configurationDetails[0].unitVariant = "Luxury Villa";
+    const accepted = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(mansion);
+    expect(accepted.status).toBe(201);
+    expect(accepted.body.property.villaDetails.villaType).toBe("Mansion");
+
+    const rejected = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(villa({ title: "Resale Villa", transactionType: "Resale" }));
+    expect(rejected.status).toBe(400);
+    expect(rejected.body.error).toMatch(/Resale properties are not applicable/i);
   });
 
   it("rejects mismatched tags and rows", async () => {

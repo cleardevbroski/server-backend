@@ -100,7 +100,7 @@ const villaConfigurationDetailSchema = new mongoose.Schema(
   {
     configuration: { type: String, trim: true },
     bhk: { type: String, default: "", trim: true },
-    unitVariant: { type: String, enum: ["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Custom"] },
+    unitVariant: { type: String, enum: ["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Luxury Villa", "Mansion", "Custom"] },
     price: { type: String, trim: true },
     plotArea: { type: String, trim: true },
     builtUpArea: { type: String, trim: true },
@@ -129,7 +129,7 @@ const villaConfigurationDetailSchema = new mongoose.Schema(
 
 const villaDetailsSchema = new mongoose.Schema(
   {
-    villaType: { type: String, enum: ["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Mixed Villa Development"] },
+    villaType: { type: String, enum: ["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Luxury Villa", "Mansion", "Mixed Villa Development"] },
     configurationDetails: { type: [villaConfigurationDetailSchema] },
     plotDimensions: { type: String, default: "", trim: true },
     numberOfFloors: { type: String, default: "", trim: true },
@@ -247,6 +247,11 @@ const possessionDetailsSchema = new mongoose.Schema(
 const projectAreaSchema = new mongoose.Schema(
   {
     totalAcres: { type: Number, min: 0 },
+    openSpaceSqft: { type: Number, min: 0 },
+    builtUpSqft: { type: Number, min: 0 },
+    amenitiesSqft: { type: Number, min: 0 },
+    // Legacy fields remain readable for already-published records. New and
+    // pending records are normalized into the square-foot fields above.
     openSpaceAcres: { type: Number, min: 0 },
     builtUpAcres: { type: Number, min: 0 },
     amenitiesAcres: { type: Number, min: 0 },
@@ -304,6 +309,12 @@ const nearbyDetailSchema = new mongoose.Schema(
         address: { type: String, default: "", trim: true },
         distance: { type: String, default: "", trim: true },
         landmark: { type: String, default: "", trim: true },
+        latitude: { type: Number, min: -90, max: 90 },
+        longitude: { type: Number, min: -180, max: 180 },
+        osmId: { type: String, default: "", trim: true },
+        mapUrl: { type: String, default: "", trim: true },
+        resolvedAddress: { type: String, default: "", trim: true },
+        approximateDistanceMeters: { type: Number, min: 0 },
       }],
       default: undefined,
     },
@@ -370,6 +381,7 @@ const propertySchema = new mongoose.Schema(
     projectNarrative: { type: projectNarrativeSchema, default: undefined },
     masterPlan: { type: masterPlanSchema, default: undefined },
     projectDownloads: { type: [projectDownloadSchema], default: [] },
+    walkthroughVideoUrl: { type: String, default: "", trim: true, maxlength: 500 },
     faqs: { type: [projectFaqSchema], default: [] },
     possession: { type: String, default: "" },
     possessionDetails: { type: possessionDetailsSchema, default: undefined },
@@ -443,6 +455,8 @@ const propertySchema = new mongoose.Schema(
       address: { type: String, default: "", trim: true },
       landmark: { type: String, default: "" },
       pinCode: { type: String, default: "", trim: true },
+      latitude: { type: Number, min: -90, max: 90 },
+      longitude: { type: Number, min: -180, max: 180 },
     },
 
     nearbyAmenities: {

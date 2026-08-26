@@ -15,8 +15,8 @@ const FACING_OPTIONS = new Set([
   "South-East",
   "South-West",
 ]);
-const VILLA_TYPES = new Set(["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Mixed Villa Development"]);
-const VILLA_UNIT_VARIANTS = new Set(["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Custom"]);
+const VILLA_TYPES = new Set(["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Luxury Villa", "Mansion", "Mixed Villa Development"]);
+const VILLA_UNIT_VARIANTS = new Set(["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Luxury Villa", "Mansion", "Custom"]);
 const VILLA_POSSESSION_STATUSES = new Set(["Ready to Move", "Under Construction"]);
 const FURNISHING_OPTIONS = new Set(["Unfurnished", "Semi-Furnished", "Fully Furnished"]);
 const PLOT_APPROVAL_AUTHORITIES = new Set(["BMRDA", "BDA", "BBMP", "DTCP", "Panchayat", "MPA"]);
@@ -89,8 +89,11 @@ function inferVillaUnitVariant(value) {
   if (/\bpent\s*house\b/.test(normalized)) return "Penthouse";
   if (/\bsky\s*villa\b/.test(normalized)) return "Sky Villa";
   if (/\b(row\s*(?:house|villa)|town\s*house)\b/.test(normalized)) return "Row House";
+  if (/\bmansion\b/.test(normalized)) return "Mansion";
+  if (/\bluxury\s*villa\b/.test(normalized)) return "Luxury Villa";
   if (/\btwin\s*villa\b/.test(normalized)) return "Twin Villa";
   if (/\bindependent\s*villa\b/.test(normalized)) return "Independent Villa";
+  if (/^villa$/.test(normalized.trim())) return "Independent Villa";
   return undefined;
 }
 
@@ -204,6 +207,27 @@ function optionalPositiveNumber(value, label) {
   const number = Number(value);
   if (!Number.isFinite(number) || number < 0) throw new PropertyPayloadError(`${label} must be zero or greater`);
   return number;
+}
+
+function optionalCoordinate(value, label, minimum, maximum) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < minimum || number > maximum) {
+    throw new PropertyPayloadError(`${label} must be between ${minimum} and ${maximum}`);
+  }
+  return number;
+}
+
+function optionalHttpUrl(value, label) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  try {
+    const url = new URL(normalized);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error();
+    return url.toString();
+  } catch {
+    throw new PropertyPayloadError(`${label} must be a valid HTTP(S) URL`);
+  }
 }
 
 function normalizeRooms(rooms, configuration) {
@@ -339,6 +363,29 @@ function normalizeProjectContent(payload) {
     payload.projectDownloads = [];
   }
 
+  const walkthroughVideoUrl = String(payload.walkthroughVideoUrl || "").trim();
+  if (walkthroughVideoUrl) {
+    try {
+      const url = new URL(walkthroughVideoUrl);
+      const host = url.hostname.toLowerCase().replace(/^www\./, "");
+      let videoId = "";
+      if (host === "youtu.be") videoId = url.pathname.split("/").filter(Boolean)[0] || "";
+      if (["youtube.com", "m.youtube.com"].includes(host)) {
+        videoId = url.searchParams.get("v") || "";
+        if (!videoId) {
+          const parts = url.pathname.split("/").filter(Boolean);
+          if (["shorts", "embed", "live"].includes(parts[0])) videoId = parts[1] || "";
+        }
+      }
+      if (url.protocol !== "https:" || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) throw new Error();
+      payload.walkthroughVideoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    } catch {
+      throw new PropertyPayloadError("Walkthrough video must be a valid HTTPS YouTube link");
+    }
+  } else {
+    payload.walkthroughVideoUrl = "";
+  }
+
   if (Array.isArray(payload.faqs)) {
     if (payload.faqs.length > 15) throw new PropertyPayloadError("A property supports up to 15 FAQs");
     payload.faqs = payload.faqs.map((faq, index) => ({
@@ -355,12 +402,43 @@ function validateLocalityAndNearby(payload) {
   if (payload.locality?.pinCode && !/^\d{6}$/.test(payload.locality.pinCode)) {
     throw new PropertyPayloadError("PIN code must contain exactly 6 digits");
   }
+  if (payload.locality) {
+    payload.locality.latitude = optionalCoordinate(payload.locality.latitude, "Property latitude", -90, 90);
+    payload.locality.longitude = optionalCoordinate(payload.locality.longitude, "Property longitude", -180, 180);
+    if ((payload.locality.latitude === undefined) !== (payload.locality.longitude === undefined)) {
+      throw new PropertyPayloadError("Property latitude and longitude must be provided together");
+    }
+  }
   payload.facilities = normalizeFacilities(payload.facilities);
   payload.nearbyDetails = validateNearbyDetails(payload.nearbyDetails);
   normalizeProjectContent(payload);
 }
 
+function normalizeProjectAreaAndInventory(payload) {
+  const projectArea = payload.projectArea;
+  if (projectArea && Object.values(projectArea).some((value) => value !== undefined && value !== null && value !== "")) {
+    const totalAcres = optionalPositiveNumber(projectArea.totalAcres, "Total land area");
+    // Pending records created by the old form contain square-foot numbers in
+    // fields incorrectly named *Acres. Treat those values as square feet 1:1.
+    const openSpaceSqft = optionalPositiveNumber(projectArea.openSpaceSqft ?? projectArea.openSpaceAcres, "Open space area");
+    const builtUpSqft = optionalPositiveNumber(projectArea.builtUpSqft ?? projectArea.builtUpAcres, "Project built-up area");
+    const amenitiesSqft = optionalPositiveNumber(projectArea.amenitiesSqft ?? projectArea.amenitiesAcres, "Amenities area");
+    payload.projectArea = { totalAcres, openSpaceSqft, builtUpSqft, amenitiesSqft };
+  } else {
+    payload.projectArea = undefined;
+  }
+  payload.totalUnits = payload.totalUnits === undefined || payload.totalUnits === null || payload.totalUnits === ""
+    ? undefined
+    : requireInteger(payload.totalUnits, "Total number of units", 1);
+  payload.totalTowers = payload.totalTowers === undefined || payload.totalTowers === null || payload.totalTowers === ""
+    ? undefined
+    : requireInteger(payload.totalTowers, "Total number of towers", 1);
+}
+
 function validateSharedStructuredFields(payload, propertyLabel) {
+  if (propertyLabel !== "PG / Co-living" && payload.transactionType !== "New Property") {
+    throw new PropertyPayloadError(payload.transactionType === "Resale" ? "Resale properties are not applicable" : `${propertyLabel} transaction type must be New Property`);
+  }
   if (payload.reraRegistered) {
     payload.reraPhases = normalizeReraPhases(payload.reraPhases, payload.reraNumber, propertyLabel);
     payload.reraNumber = payload.reraPhases[0].reraNumber;
@@ -369,6 +447,7 @@ function validateSharedStructuredFields(payload, propertyLabel) {
     payload.reraPhases = [];
   }
   validateLocalityAndNearby(payload);
+  normalizeProjectAreaAndInventory(payload);
 }
 
 function normalizeReraDocuments(documents, allowed, groupLabel) {
@@ -467,10 +546,21 @@ function validateNearbyDetails(nearbyDetails) {
             address: String(place.address || "").trim(),
             distance: String(place.distance || "").trim(),
             landmark: String(place.landmark || "").trim(),
+            latitude: optionalCoordinate(place.latitude, `${key} place ${index + 1} latitude`, -90, 90),
+            longitude: optionalCoordinate(place.longitude, `${key} place ${index + 1} longitude`, -180, 180),
+            osmId: String(place.osmId || "").trim(),
+            mapUrl: optionalHttpUrl(place.mapUrl, `${key} place ${index + 1} map URL`),
+            resolvedAddress: String(place.resolvedAddress || "").trim(),
+            approximateDistanceMeters: optionalPositiveNumber(place.approximateDistanceMeters, `${key} place ${index + 1} approximate distance`),
           }))
       : [];
     const hasLegacy = (item.count !== undefined && item.count !== null && item.count !== "") || String(item.distance || "").trim();
     if (!places.length && !hasLegacy) continue;
+    for (const [index, place] of places.entries()) {
+      if ((place.latitude === undefined) !== (place.longitude === undefined)) {
+        throw new PropertyPayloadError(`${key} place ${index + 1} latitude and longitude must be provided together`);
+      }
+    }
     result[key] = places.length
       ? { places }
       : {
@@ -534,28 +624,6 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   }
 
   validateSharedStructuredFields(payload, "Apartment");
-  const projectArea = payload.projectArea;
-  if (projectArea && Object.values(projectArea).some((value) => value !== undefined && value !== null && value !== "")) {
-    const totalAcres = optionalPositiveNumber(projectArea.totalAcres, "Total project area");
-    const openSpaceAcres = optionalPositiveNumber(projectArea.openSpaceAcres, "Open space area");
-    const builtUpAcres = optionalPositiveNumber(projectArea.builtUpAcres, "Apartment built-up area");
-    const amenitiesAcres = optionalPositiveNumber(projectArea.amenitiesAcres, "Amenities area");
-    if (amenitiesAcres !== undefined && [totalAcres, openSpaceAcres, builtUpAcres].every((value) => value !== undefined) && Math.abs(totalAcres - openSpaceAcres - builtUpAcres - amenitiesAcres) > 0.001) {
-      throw new PropertyPayloadError("Building, empty/open space and amenities area must equal the total project area");
-    }
-    if (amenitiesAcres === undefined && [totalAcres, openSpaceAcres, builtUpAcres].every((value) => value !== undefined) && Math.abs(totalAcres - openSpaceAcres - builtUpAcres) > 0.001) {
-      throw new PropertyPayloadError("Open space and apartment built-up area must equal the total project area");
-    }
-    payload.projectArea = { totalAcres, openSpaceAcres, builtUpAcres, amenitiesAcres };
-  } else {
-    payload.projectArea = undefined;
-  }
-  payload.totalUnits = payload.totalUnits === undefined || payload.totalUnits === null || payload.totalUnits === ""
-    ? undefined
-    : requireInteger(payload.totalUnits, "Total number of units", 1);
-  payload.totalTowers = payload.totalTowers === undefined || payload.totalTowers === null || payload.totalTowers === ""
-    ? undefined
-    : requireInteger(payload.totalTowers, "Total number of towers", 1);
   payload.ownershipType = undefined;
   payload.bookingAmount = undefined;
   if (String(payload.description || "").trim().length < 50) {
@@ -596,12 +664,15 @@ function normalizePlotDimensions(value) {
 }
 
 function normalizeFloorCount(value) {
-  const normalized = String(value || "").trim().replace(/\s+/g, "").toUpperCase();
+  const normalized = String(value || "").trim();
   if (!normalized) return "";
-  if (!/^(?:G(?:\+[1-9]\d*)?|[1-9]\d*)$/.test(normalized)) {
-    throw new PropertyPayloadError("Number of floors must be G, G+N, or a positive whole number");
-  }
-  return normalized;
+  const compact = normalized.replace(/\b(?:upper\s+)?floors?\b/gi, "").trim();
+  if (/^(?:g|ground(?:\s+floor)?)$/i.test(compact)) return "G";
+  const ground = compact.match(/^(?:g|ground(?:\s+floor)?)\s*(?:\+|plus)\s*([1-9]\d*)$/i);
+  if (ground) return `G+${Number(ground[1])}`;
+  const numeric = compact.match(/^([1-9]\d*)$/);
+  if (numeric) return String(Number(numeric[1]));
+  throw new PropertyPayloadError("Number of floors must be G, G+N, Ground + N Floors, or a positive whole number");
 }
 
 function normalizeVillaPayload(input, { requireStructured = false } = {}) {
@@ -700,8 +771,8 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     throw new PropertyPayloadError("Villa furnishing must be Unfurnished, Semi-Furnished, or Fully Furnished");
   }
   payload.builder = requireText(payload.builder, "Villa builder/developer");
-  if (!["New Property", "Resale"].includes(payload.transactionType)) {
-    throw new PropertyPayloadError("Villa transaction type must be New Property or Resale");
+  if (payload.transactionType !== "New Property") {
+    throw new PropertyPayloadError(payload.transactionType === "Resale" ? "Resale properties are not applicable" : "Villa transaction type must be New Property");
   }
   if (!["For Sale", "For Rent"].includes(payload.listingType)) {
     throw new PropertyPayloadError("Villa listing type must be For Sale or For Rent");
@@ -855,7 +926,7 @@ function normalizePlotPayload(input, { requireStructured = false } = {}) {
     throw new PropertyPayloadError("Road width must contain a positive number");
   }
   payload.builder = requireText(payload.builder, "Plot builder/developer");
-  if (!['New Property', 'Resale'].includes(payload.transactionType)) throw new PropertyPayloadError("Plot transaction type must be New Property or Resale");
+  if (payload.transactionType !== 'New Property') throw new PropertyPayloadError(payload.transactionType === "Resale" ? "Resale properties are not applicable" : "Plot transaction type must be New Property");
   if (!['For Sale', 'For Rent'].includes(payload.listingType)) throw new PropertyPayloadError("Plot listing type must be For Sale or For Rent");
   validateSharedStructuredFields(payload, "Plot");
 
@@ -929,7 +1000,7 @@ function normalizeCommercialPayload(input, { requireStructured = false } = {}) {
     throw new PropertyPayloadError(underConstruction ? "Under Construction requires only an expected completion month and year" : "Ready to Move requires only a ready date");
   }
   payload.builder = requireText(payload.builder, "Commercial builder/developer");
-  if (!['New Property', 'Resale'].includes(payload.transactionType)) throw new PropertyPayloadError("Commercial transaction type must be New Property or Resale");
+  if (payload.transactionType !== 'New Property') throw new PropertyPayloadError(payload.transactionType === "Resale" ? "Resale properties are not applicable" : "Commercial transaction type must be New Property");
   if (!['For Sale', 'For Rent'].includes(payload.listingType)) throw new PropertyPayloadError("Commercial listing type must be For Sale or For Rent");
   validateSharedStructuredFields(payload, "Commercial");
   payload.commercialDetails = {

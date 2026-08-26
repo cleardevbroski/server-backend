@@ -418,7 +418,7 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
       maxPrice,
       bedrooms,
       search,
-      sort = "-createdAt",
+      sort = "-updatedAt",
     } = req.query;
 
     const filter = {};
@@ -585,6 +585,9 @@ router.put(
         property.reviewMessages.push({ senderRole: "admin", sender: req.user._id, message });
       }
       if (action === "publish") {
+        // Revalidate the complete project at approval time and persist any
+        // legacy area labels into the canonical square-foot fields.
+        property.set(prepareSubmittedPropertyPayload(property.toObject(), property));
         property.status = "published";
         property.verified = true;
         property.published = true;
@@ -601,6 +604,7 @@ router.put(
       return res.json({ message: "Submission updated", property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
     } catch (error) {
       if (error.name === "CastError") return res.status(404).json({ error: "Submission not found" });
+      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: error.message });
       console.error("Review public submission error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }

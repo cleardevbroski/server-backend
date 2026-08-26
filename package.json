@@ -11,6 +11,7 @@
     "db:backfill-channel-partner-codes": "node scripts/backfill-channel-partner-codes.js",
     "db:migrate-channel-partner-clients": "node scripts/migrate-channel-partner-client-lifecycle.js",
     "db:migrate-property-rera": "node scripts/migrate-property-rera.js",
+    "db:migrate-pending-project-areas": "node scripts/migrate-pending-project-areas.js",
     "db:clear": "node clear.js"
   },
   "dependencies": {

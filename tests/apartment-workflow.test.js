@@ -113,12 +113,14 @@ describe("Apartment property workflow", () => {
           mimeType: "application/pdf",
           fileSize: 1024,
         }],
+        walkthroughVideoUrl: "https://youtu.be/dQw4w9WgXcQ?t=20",
         faqs: [{ question: "Where is the project?", answer: "Whitefield, Bangalore." }],
       }));
 
     expect(created.status).toBe(201);
     expect(created.body.property.projectNarrative.usps).toEqual(["Large central green"]);
     expect(created.body.property.projectDownloads[0].fileUrl).toContain("res.cloudinary.com");
+    expect(created.body.property.walkthroughVideoUrl).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
 
     const publicResult = await request(app).get(`/api/properties/${created.body.property.id}`);
     expect(publicResult.status).toBe(200);
@@ -251,7 +253,7 @@ describe("Apartment property workflow", () => {
     expect(res.body.error).toMatch(/expected completion month and year/i);
   });
 
-  it("requires conditional RERA fields and validates the project-area split", async () => {
+  it("requires conditional RERA fields and validates project-area values", async () => {
     const { token } = await createAdminToken();
     const rera = await request(app)
       .post("/api/properties")
@@ -263,26 +265,27 @@ describe("Apartment property workflow", () => {
     const area = await request(app)
       .post("/api/properties")
       .set("Authorization", `Bearer ${token}`)
-      .send(apartment({ projectArea: { totalAcres: 5, openSpaceAcres: 3, builtUpAcres: 3 } }));
+      .send(apartment({ projectArea: { totalAcres: 5, openSpaceSqft: -1, builtUpSqft: 3000 } }));
     expect(area.status).toBe(400);
-    expect(area.body.error).toMatch(/must equal the total project area/i);
+    expect(area.body.error).toMatch(/zero or greater/i);
   });
 
-  it("stores a valid explicit amenities-area split and rejects an inaccurate one", async () => {
+  it("stores component areas as square feet and moves legacy labels 1:1", async () => {
     const { token } = await createAdminToken();
     const valid = await request(app)
       .post("/api/properties")
       .set("Authorization", `Bearer ${token}`)
-      .send(apartment({ projectArea: { totalAcres: 5, openSpaceAcres: 2, builtUpAcres: 2, amenitiesAcres: 1 } }));
+      .send(apartment({ projectArea: { totalAcres: 5, openSpaceSqft: 3000, builtUpSqft: 12000, amenitiesSqft: 1500 } }));
     expect(valid.status).toBe(201);
-    expect(valid.body.property.projectArea).toMatchObject({ totalAcres: 5, openSpaceAcres: 2, builtUpAcres: 2, amenitiesAcres: 1 });
+    expect(valid.body.property.projectArea).toMatchObject({ totalAcres: 5, openSpaceSqft: 3000, builtUpSqft: 12000, amenitiesSqft: 1500 });
 
-    const invalid = await request(app)
+    const legacy = await request(app)
       .post("/api/properties")
       .set("Authorization", `Bearer ${token}`)
-      .send(apartment({ projectArea: { totalAcres: 5, openSpaceAcres: 2, builtUpAcres: 2, amenitiesAcres: 2 } }));
-    expect(invalid.status).toBe(400);
-    expect(invalid.body.error).toMatch(/amenities area must equal the total project area/i);
+      .send(apartment({ title: "Legacy area labels", projectArea: { totalAcres: 5, openSpaceAcres: 3000, builtUpAcres: 12000, amenitiesAcres: 1500 } }));
+    expect(legacy.status).toBe(201);
+    expect(legacy.body.property.projectArea).toMatchObject({ totalAcres: 5, openSpaceSqft: 3000, builtUpSqft: 12000, amenitiesSqft: 1500 });
+    expect(legacy.body.property.projectArea).not.toHaveProperty("openSpaceAcres");
   });
 
   it("matches a nested bedroom configuration in the public list", async () => {

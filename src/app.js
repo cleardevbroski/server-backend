@@ -57,7 +57,13 @@ app.use(
 // validates MIME/signature/size and pipes bytes directly to Cloudinary.
 app.use(
   "/api/property-media",
-  rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many media uploads. Please try again later." } }),
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 500,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many media uploads. Uploading will resume when the current limit resets." },
+  }),
   require("./routes/propertyMedia")
 );
 app.use(
@@ -85,6 +91,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/property-auth", require("./routes/propertyAuth"));
 app.use("/api/login-reports", require("./routes/loginReports"));
 app.use("/api/properties", propertyRoutes);
+app.use("/api/geocoding", require("./routes/geocoding"));
 app.use("/api/dealers", dealerRoutes);
 app.use("/api/builders", builderRoutes);
 app.use("/api/hero", heroRoutes);

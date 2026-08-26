@@ -8,7 +8,7 @@ describe("cross-property locality and neighbourhood workflow", () => {
     const nearbyDetails = {
       colleges: {
         places: [
-          { name: "City Engineering College", address: "Main Road", distance: "1.2 km", landmark: "Near Metro Gate" },
+          { name: "City Engineering College", address: "Main Road", distance: "1.2 km", landmark: "Near Metro Gate", latitude: 12.9716, longitude: 77.5946, osmId: "node/42", mapUrl: "https://www.google.com/maps/search/?api=1&query=12.9716,77.5946", resolvedAddress: "Main Road, Bangalore", approximateDistanceMeters: 1250 },
           { name: "National Degree College", distance: "2.5 km" },
         ],
       },
@@ -27,12 +27,13 @@ describe("cross-property locality and neighbourhood workflow", () => {
         .send({
           propertyType,
           title: `${propertyType} neighbourhood test`,
-          locality: { city: "Bangalore", address: "Whitefield Main Road" },
+          locality: { city: "Bangalore", address: "Whitefield Main Road", latitude: 12.9698, longitude: 77.75 },
           nearbyDetails,
         });
 
       expect(response.status).toBe(201);
       expect(response.body.property.locality.address).toBe("Whitefield Main Road");
+      expect(response.body.property.locality).toMatchObject({ latitude: 12.9698, longitude: 77.75 });
       expect(response.body.property.nearbyDetails.colleges.places).toHaveLength(2);
       expect(response.body.property.nearbyDetails.hospitals.places).toHaveLength(2);
       expect(response.body.property.nearbyDetails.colleges.places[0]).toMatchObject({
@@ -40,6 +41,10 @@ describe("cross-property locality and neighbourhood workflow", () => {
         address: "Main Road",
         distance: "1.2 km",
         landmark: "Near Metro Gate",
+        latitude: 12.9716,
+        longitude: 77.5946,
+        osmId: "node/42",
+        approximateDistanceMeters: 1250,
       });
     }
   });
