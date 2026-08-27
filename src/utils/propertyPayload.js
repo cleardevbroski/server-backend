@@ -43,11 +43,25 @@ const KARNATAKA_RERA_HOSTS = new Set(["rera.karnataka.gov.in", "www.rera.karnata
 const PROJECT_DOCUMENTS = new Map([
   ["commencement-certificate", ["Commencement Certificate", "Annexure 80"]],
   ["approved-building-plan", ["Approved Building Plan", "Annexure 81"]],
+  ["approved-layout-plan", ["Approved Layout Plan", ""]],
+  ["electricity-permission-letter", ["Electricity Permission Letter", ""]],
+  ["water-permission-letter", ["Water Permission Letter", ""]],
+  ["existing-layout-plan", ["Existing Layout Plan", ""]],
+  ["existing-section-plan", ["Existing Section Plan and Specification", ""]],
   ["sectional-drawing", ["Sectional Drawing of the Apartments", "Annexure 82"]],
+  ["approved-section-plan", ["Approved Section of Building / Infrastructure Plan", ""]],
+  ["area-development-plan", ["Area Development Plan of Project Area", ""]],
   ["structural-safety-certificate", ["Structural Safety Certificate from Registered Engineer", "Annexure 83"]],
   ["project-specifications", ["Project Specifications", "Annexure 84"]],
   ["brochure", ["Brochure", "Annexure 85"]],
   ["relinquishment-deed", ["Relinquishment Deed", "Annexure 86"]],
+  ["advocate-search-report", ["Advocate Search Report", ""]],
+  ["urban-land-ceiling", ["Urban Land Ceiling", ""]],
+  ["development-agreement", ["Development / Collaboration Agreement", ""]],
+  ["change-of-land-use", ["Change of Land Use", ""]],
+  ["district-magistrate", ["District Magistrate Document", ""]],
+  ["conversion-certificate", ["Conversion Certificate", ""]],
+  ["title-rights-document", ["Rights / Title / Interest Document", ""]],
   ["agreement-for-sale", ["Proforma of Agreement for Sale", "Annexure 87"]],
   ["allotment-letter", ["Proforma of Allotment Letter", "Annexure 88"]],
 ]);
@@ -488,6 +502,37 @@ function normalizeReraDocuments(documents, allowed, groupLabel) {
   });
 }
 
+function normalizeOfficialDate(value, label) {
+  const source = String(value || "").trim();
+  if (!source) return "";
+  const match = source.match(/^(?:(\d{4})-(\d{2})-(\d{2})|(\d{2})-(\d{2})-(\d{4}))$/);
+  if (!match) throw new PropertyPayloadError(`${label} must use YYYY-MM-DD or DD-MM-YYYY format`);
+  const year = Number(match[1] || match[6]);
+  const month = Number(match[2] || match[5]);
+  const day = Number(match[3] || match[4]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    throw new PropertyPayloadError(`${label} is not a valid calendar date`);
+  }
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function normalizeReraOfficialDetails(value) {
+  if (!value || typeof value !== "object") return undefined;
+  const details = {
+    promoterName: String(value.promoterName || "").trim().slice(0, 250),
+    projectId: String(value.projectId || "").trim().slice(0, 100),
+    acknowledgementNumber: String(value.acknowledgementNumber || "").trim().slice(0, 150),
+    registrationStatus: String(value.registrationStatus || "").trim().slice(0, 100),
+    district: String(value.district || "").trim().slice(0, 150),
+    approvalDate: normalizeOfficialDate(value.approvalDate, "RERA project approval date"),
+    registeredCompletionDate: normalizeOfficialDate(value.registeredCompletionDate, "RERA registered completion date"),
+    registeredAddress: String(value.registeredAddress || "").trim().slice(0, 1000),
+    promoterAddress: String(value.promoterAddress || "").trim().slice(0, 1000),
+  };
+  return Object.values(details).some(Boolean) ? details : undefined;
+}
+
 function normalizeReraPhases(phases, legacyNumber, propertyLabel) {
   const source = Array.isArray(phases) && phases.length
     ? phases
@@ -516,6 +561,7 @@ function normalizeReraPhases(phases, legacyNumber, propertyLabel) {
       reraNumber,
       reraSiteUrl: normalizeKarnatakaReraUrl(phase.reraSiteUrl),
       order: index,
+      officialDetails: normalizeReraOfficialDetails(phase.officialDetails),
       reraDocuments: normalizeReraDocuments(phase.reraDocuments, RERA_DOCUMENTS, "RERA"),
       projectDocuments: normalizeReraDocuments(phase.projectDocuments, PROJECT_DOCUMENTS, "Project"),
     };

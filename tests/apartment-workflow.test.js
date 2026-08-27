@@ -165,6 +165,59 @@ describe("Apartment property workflow", () => {
     expect(rejected.body.error).toMatch(/50 MB/i);
   });
 
+  it("persists official RERA metadata and extended imported document categories", async () => {
+    const { token } = await createAdminToken();
+    const reraNumber = "PRM/KA/RERA/1251/310/PR/220922/005266";
+    const document = (key, label) => ({
+      key,
+      label,
+      fileName: `${key}.pdf`,
+      fileUrl: `https://res.cloudinary.com/demo/raw/upload/${key}.pdf`,
+      mimeType: "application/pdf",
+      fileSize: 2048,
+    });
+    const res = await request(app).post("/api/properties").set("Authorization", `Bearer ${token}`).send(apartment({
+      reraRegistered: true,
+      reraNumber,
+      reraPhases: [{
+        name: "Phase 1",
+        reraNumber,
+        officialDetails: {
+          promoterName: "REDDY STRUCTURES PRIVATE LIMITED",
+          projectId: "9960",
+          acknowledgementNumber: "ACK/KA/RERA/1251/310/PR/190822/006261",
+          registrationStatus: "APPROVED",
+          district: "BENGALURU URBAN",
+          approvalDate: "22-09-2022",
+          registeredCompletionDate: "31-03-2027",
+          registeredAddress: "Katha No. 28/25/1P, Kommaghatta Village, Kengeri Hobli, Bengaluru South",
+          promoterAddress: "#133/1, 2nd Floor, The Residency, Residency Road, Bengaluru 560060",
+        },
+        reraDocuments: [document("registration-certificate", "Registration Certificate")],
+        projectDocuments: [
+          document("electricity-permission-letter", "Electricity Permission Letter"),
+          document("approved-layout-plan", "Approved Layout Plan"),
+          document("development-agreement", "Development / Collaboration Agreement"),
+          document("title-rights-document", "Rights / Title / Interest Document"),
+        ],
+      }],
+    }));
+
+    expect(res.status).toBe(201);
+    expect(res.body.property.reraPhases[0].officialDetails).toMatchObject({
+      promoterName: "REDDY STRUCTURES PRIVATE LIMITED",
+      projectId: "9960",
+      approvalDate: "2022-09-22",
+      registeredCompletionDate: "2027-03-31",
+    });
+    expect(res.body.property.reraPhases[0].projectDocuments.map((row) => row.key)).toEqual([
+      "electricity-permission-letter",
+      "approved-layout-plan",
+      "development-agreement",
+      "title-rights-document",
+    ]);
+  });
+
   it("persists at most three ordered Project Overview photos", async () => {
     const { token } = await createAdminToken();
     const heroImages = [

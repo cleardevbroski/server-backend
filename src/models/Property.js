@@ -343,11 +343,24 @@ const reraDocumentSchema = new mongoose.Schema({
   uploadedAt: { type: Date, default: Date.now },
 });
 
+const reraOfficialDetailsSchema = new mongoose.Schema({
+  promoterName: { type: String, default: "", trim: true, maxlength: 250 },
+  projectId: { type: String, default: "", trim: true, maxlength: 100 },
+  acknowledgementNumber: { type: String, default: "", trim: true, maxlength: 150 },
+  registrationStatus: { type: String, default: "", trim: true, maxlength: 100 },
+  district: { type: String, default: "", trim: true, maxlength: 150 },
+  approvalDate: { type: String, default: "", trim: true, maxlength: 10 },
+  registeredCompletionDate: { type: String, default: "", trim: true, maxlength: 10 },
+  registeredAddress: { type: String, default: "", trim: true, maxlength: 1000 },
+  promoterAddress: { type: String, default: "", trim: true, maxlength: 1000 },
+}, { _id: false });
+
 const reraPhaseSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 100 },
   reraNumber: { type: String, required: true, trim: true, maxlength: 100 },
   reraSiteUrl: { type: String, default: "https://rera.karnataka.gov.in/viewAllProjects", trim: true, maxlength: 2000 },
   order: { type: Number, min: 0, default: 0 },
+  officialDetails: { type: reraOfficialDetailsSchema, default: undefined },
   reraDocuments: { type: [reraDocumentSchema], default: [] },
   projectDocuments: { type: [reraDocumentSchema], default: [] },
 });
