@@ -15,6 +15,7 @@ const FACING_OPTIONS = new Set([
   "South-East",
   "South-West",
 ]);
+const FACING_ERROR_MESSAGE = "Plot facing must be one direction: East, West, North, South, North-East, North-West, South-East, or South-West";
 const VILLA_TYPES = new Set(["Independent", "Row Villa", "Twin Villa", "Villament", "Penthouse", "Duplex Villa", "Triplex Villa", "Luxury Villa", "Mansion", "Mixed Villa Development"]);
 const VILLA_UNIT_VARIANTS = new Set(["Simplex", "Duplex", "Triplex", "Villament", "Penthouse", "Row House", "Independent Villa", "Twin Villa", "Sky Villa", "Luxury Villa", "Mansion", "Custom"]);
 const VILLA_POSSESSION_STATUSES = new Set(["Ready to Move", "Under Construction"]);
@@ -707,7 +708,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
     }
     const rowFacing = String(row.plotFacing || "").trim();
     if (rowFacing && !FACING_OPTIONS.has(rowFacing)) {
-      throw new PropertyPayloadError(`${configuration} plot facing is invalid`);
+      throw new PropertyPayloadError(`${configuration}: ${FACING_ERROR_MESSAGE}`);
     }
     const rowRoadWidth = String(row.roadWidthFacing || "").trim();
     if (rowRoadWidth && (!Number.isFinite(parseNumericDisplay(rowRoadWidth, "area")) || parseNumericDisplay(rowRoadWidth, "area") <= 0)) {
@@ -746,7 +747,7 @@ function normalizeVillaPayload(input, { requireStructured = false } = {}) {
   if (tags.length !== rows.length || tags.some((tag, index) => tag !== rows[index].configuration)) {
     throw new PropertyPayloadError("Configuration tags and Villa detail rows must match in the same order");
   }
-  if (details.plotFacing && !FACING_OPTIONS.has(details.plotFacing)) throw new PropertyPayloadError("Villa plot facing is invalid");
+  if (details.plotFacing && !FACING_OPTIONS.has(details.plotFacing)) throw new PropertyPayloadError(FACING_ERROR_MESSAGE.replace(/^Plot/, "Villa plot"));
 
   const possession = payload.possessionDetails;
   if (!possession || !VILLA_POSSESSION_STATUSES.has(possession.status)) {
@@ -1043,6 +1044,7 @@ function normalizePgPayload(input, { requireStructured = false } = {}) {
 }
 module.exports = {
   FACING_OPTIONS,
+  FACING_ERROR_MESSAGE,
   PropertyPayloadError,
   normalizeKarnatakaReraUrl,
   normalizeConfiguration,

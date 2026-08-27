@@ -17,7 +17,7 @@ const {
   collectPropertyMediaAssets,
   deleteCloudinaryAssets,
 } = require("../utils/mediaUpload");
-const { normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
+const { FACING_ERROR_MESSAGE, FACING_OPTIONS, normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
 const { normalizePropertySubmissionProfile, PropertySubmissionProfileError } = require("../utils/propertySubmissionProfile");
 const { sendPropertySubmissionEmail } = require("../services/emailService");
 const { PROPERTY_DOCUMENT_MAX_BYTES, PROPERTY_WALKTHROUGH_MAX_BYTES } = require("../utils/propertyMediaLimits");
@@ -29,6 +29,29 @@ function assertPropertyTypeIsSupported(propertyType) {
   if (RETIRED_PROPERTY_TYPES.includes(String(propertyType || "").trim())) {
     throw new PropertyPayloadError("Rent and Lease property types are no longer supported");
   }
+}
+
+function assertOptionalVillaFacings(payload) {
+  if (payload.propertyType !== "Villa" || !payload.villaDetails) return;
+  const details = payload.villaDetails;
+  const sharedFacing = String(details.plotFacing || "").trim();
+  if (sharedFacing && !FACING_OPTIONS.has(sharedFacing)) {
+    throw new PropertyPayloadError(FACING_ERROR_MESSAGE.replace(/^Plot/, "Villa plot"));
+  }
+  (details.configurationDetails || []).forEach((row, index) => {
+    const facing = String(row?.plotFacing || "").trim();
+    if (!facing || FACING_OPTIONS.has(facing)) return;
+    const label = String(row?.configuration || `Configuration ${index + 1}`).trim();
+    throw new PropertyPayloadError(`${label}: ${FACING_ERROR_MESSAGE}`);
+  });
+}
+
+function concisePropertyValidationError(error) {
+  if (error instanceof PropertyPayloadError) return error.message;
+  const issue = Object.values(error?.errors || {})[0];
+  if (!issue) return "Check the property details and try again";
+  if (String(issue.path || "").endsWith("plotFacing")) return FACING_ERROR_MESSAGE;
+  return issue.message || "Check the property details and try again";
 }
 
 function assertPhotoOnlyMedia(body) {
@@ -264,6 +287,7 @@ function prepareOptionalPropertyPayload(body) {
     }));
   }
   assertPropertyTypeIsSupported(payload.propertyType);
+  assertOptionalVillaFacings(payload);
   return payload;
 }
 
@@ -604,7 +628,7 @@ router.put(
       return res.json({ message: "Submission updated", property: presentProperty(property, { includeDocumentUrls: true, includeSubmissionProfile: true }) });
     } catch (error) {
       if (error.name === "CastError") return res.status(404).json({ error: "Submission not found" });
-      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: error.message });
+      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
       console.error("Review public submission error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
@@ -859,7 +883,7 @@ router.post(
         property: presentProperty(property, { includeDocumentUrls: true }),
       });
     } catch (error) {
-      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: error.message });
+      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
       console.error("Create property error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
@@ -908,7 +932,7 @@ router.put(
       if (error.name === "CastError") {
         return res.status(404).json({ error: "Property not found" });
       }
-      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: error.message });
+      if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
       console.error("Update property error:", error);
       return res.status(500).json({ error: "Internal server error" });
     }
@@ -936,7 +960,7 @@ router.patch("/:id/workflow", auth, adminOnly, async (req, res) => {
     });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
-    if (error.name === "ValidationError") return res.status(400).json({ error: error.message });
+    if (error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
     console.error("Update property workflow error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }

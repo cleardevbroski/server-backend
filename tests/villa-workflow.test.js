@@ -82,6 +82,24 @@ describe("Villa property workflow", () => {
     expect(res.body.property.facing).toBe("");
   });
 
+  it("returns one concise error for a combined Villa facing", async () => {
+    const { token } = await createAdminToken();
+    const payload = villa({ status: "pending", published: false });
+    payload.villaDetails.plotFacing = "East / North / West";
+    payload.villaDetails.configurationDetails.forEach((row) => {
+      row.plotFacing = "East / North / West";
+    });
+
+    const res = await request(app)
+      .post("/api/properties")
+      .set("Authorization", `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Villa plot facing must be one direction: East, West, North, South, North-East, North-West, South-East, or South-West");
+    expect(res.body.error).not.toMatch(/Property validation failed|enum value|configurationDetails/);
+  });
+
   it("accepts repeated BHK configurations", async () => {
     const { token } = await createAdminToken();
     const repeatedRow = {
