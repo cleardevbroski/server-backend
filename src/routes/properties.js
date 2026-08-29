@@ -97,7 +97,7 @@ function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
 
 function withoutWorkflowFields(body) {
   const clean = { ...body };
-  for (const key of ["_id", "id", "postedBy", "propertyPoster", "submissionProfile", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed"]) {
+  for (const key of ["_id", "id", "postedBy", "propertyPoster", "submissionProfile", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed", "bulkImport"]) {
     delete clean[key];
   }
   delete clean.maintenanceCharges;
@@ -356,6 +356,7 @@ router.get("/", async (req, res) => {
       minPrice,
       maxPrice,
       bedrooms,
+      status,
       search,
       sort = "-createdAt",
     } = req.query;
@@ -441,6 +442,7 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
       minPrice,
       maxPrice,
       bedrooms,
+      status,
       search,
       sort = "-updatedAt",
     } = req.query;
@@ -449,6 +451,7 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
 
     if (city) filter["locality.city"] = String(city);
     if (propertyType) filter.propertyType = String(propertyType);
+    if (status) filter.status = String(status);
     if (bedrooms) {
       const b = parseInt(bedrooms);
       if (Number.isInteger(b)) {
@@ -499,6 +502,112 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
     });
   } catch (error) {
     console.error("List admin properties error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+function normalizeBulkPackage(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const packageName = String(source.packageName || "").trim();
+  const packageSize = Number(source.packageSize);
+  const packageKey = String(source.packageKey || "").trim();
+  const batchName = String(source.batchName || "").trim();
+  if (!packageName || packageName.length > 300 || !packageName.toLowerCase().endsWith(".zip")) {
+    throw new PropertyPayloadError("A valid ZIP package name is required");
+  }
+  if (!Number.isSafeInteger(packageSize) || packageSize <= 0 || packageSize > 350 * 1024 * 1024) {
+    throw new PropertyPayloadError("ZIP packages must be 350 MB or smaller");
+  }
+  const expectedKey = `${packageName.toLowerCase()}::${packageSize}`;
+  if (packageKey !== expectedKey) throw new PropertyPayloadError("The ZIP package key is invalid");
+  return { packageKey, packageName, packageSize, batchName: batchName.slice(0, 300), importedAt: new Date() };
+}
+
+// Batch-import preflight. No property or Cloudinary data is changed here.
+router.post("/admin/recheck-imports/preflight", auth, adminOnly, async (req, res) => {
+  try {
+    const packages = Array.isArray(req.body.packages) ? req.body.packages : [];
+    if (!packages.length || packages.length > 500) return res.status(400).json({ error: "Supply between 1 and 500 ZIP packages" });
+    const normalized = packages.map(normalizeBulkPackage);
+    const keys = [...new Set(normalized.map((item) => item.packageKey))];
+    const existing = await Property.find({ "bulkImport.packageKey": { $in: keys } })
+      .select("title status bulkImport.packageKey")
+      .lean();
+    return res.json({
+      packages: normalized.map((item) => {
+        const match = existing.find((property) => property.bulkImport?.packageKey === item.packageKey);
+        return { ...item, importedAt: undefined, exists: Boolean(match), propertyId: match ? String(match._id) : "", status: match?.status || "" };
+      }),
+      newCount: normalized.length - existing.length,
+      existingCount: existing.length,
+    });
+  } catch (error) {
+    if (error instanceof PropertyPayloadError) return res.status(400).json({ error: error.message });
+    console.error("Preflight recheck imports error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Stores one already-extracted package as a private Recheck property. Media is
+// uploaded separately through the existing streamed media endpoint.
+router.post("/admin/recheck-imports", auth, adminOnly, async (req, res) => {
+  try {
+    const bulkImport = normalizeBulkPackage(req.body.package);
+    const existing = await Property.findOne({ "bulkImport.packageKey": bulkImport.packageKey });
+    if (existing) {
+      return res.status(200).json({ message: "Package was already imported", skipped: true, property: presentProperty(existing, { includeDocumentUrls: true }) });
+    }
+    const normalized = prepareOptionalPropertyPayload(req.body.property || {});
+    const propertyData = withMediaLedger({
+      ...(await convertPropertyMedia(normalized)),
+      status: "recheck",
+      published: false,
+      verified: false,
+      submittedBy: "admin",
+      postedBy: req.user._id,
+      postedDate: new Date().toISOString(),
+      bulkImport,
+    });
+    const property = await Property.create(propertyData);
+    await linkProperty(property);
+    return res.status(201).json({ message: "Property imported for recheck", skipped: false, property: presentProperty(property, { includeDocumentUrls: true }) });
+  } catch (error) {
+    if (error?.code === 11000) {
+      const packageKey = String(req.body?.package?.packageKey || "");
+      const existing = await Property.findOne({ "bulkImport.packageKey": packageKey });
+      if (existing) return res.status(200).json({ message: "Package was already imported", skipped: true, property: presentProperty(existing, { includeDocumentUrls: true }) });
+    }
+    if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
+    console.error("Create recheck import error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+router.patch("/admin/recheck-imports/:id", auth, adminOnly, async (req, res) => {
+  try {
+    const action = String(req.body.action || "");
+    if (!["move_to_pending", "publish"].includes(action)) return res.status(400).json({ error: "Choose move_to_pending or publish" });
+    const property = await Property.findOne({ _id: req.params.id, status: "recheck" });
+    if (!property) return res.status(404).json({ error: "Recheck property not found" });
+    if (action === "publish") {
+      property.set(prepareSubmittedPropertyPayload(property.toObject(), property));
+      property.status = "approved";
+      property.published = true;
+      property.verified = true;
+      property.publishedAt = new Date();
+    } else {
+      property.status = "pending";
+      property.published = false;
+      property.verified = false;
+    }
+    property.reviewedBy = req.user._id;
+    property.reviewedAt = new Date();
+    await property.save();
+    return res.json({ message: action === "publish" ? "Property published" : "Property moved to Pending", property: presentProperty(property, { includeDocumentUrls: true }) });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Recheck property not found" });
+    if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
+    console.error("Update recheck property error:", error);
     return res.status(500).json({ error: "Internal server error" });
   }
 });

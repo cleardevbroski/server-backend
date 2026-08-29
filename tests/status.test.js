@@ -99,6 +99,55 @@ describe("Property status workflow", () => {
     const fresh = await Property.findById(p._id);
     expect(fresh.status).toBe("approved");
   });
+
+  it("imports ZIP packages into a separate idempotent recheck queue", async () => {
+    const { token } = await createAdminToken();
+    const packageInfo = {
+      packageName: "Project One.zip",
+      packageSize: 1024,
+      packageKey: "project one.zip::1024",
+      batchName: "August batch",
+    };
+
+    const preflight = await request(app)
+      .post("/api/properties/admin/recheck-imports/preflight")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ packages: [packageInfo] });
+    expect(preflight.status).toBe(200);
+    expect(preflight.body).toMatchObject({ newCount: 1, existingCount: 0 });
+
+    const created = await request(app)
+      .post("/api/properties/admin/recheck-imports")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ package: packageInfo, property: { title: "Project One", propertyType: "Apartment" } });
+    expect(created.status).toBe(201);
+    expect(created.body.property).toMatchObject({ title: "Project One", status: "recheck", published: false, verified: false });
+
+    const retried = await request(app)
+      .post("/api/properties/admin/recheck-imports")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ package: packageInfo, property: { title: "Duplicate" } });
+    expect(retried.status).toBe(200);
+    expect(retried.body.skipped).toBe(true);
+    expect(await Property.countDocuments({ "bulkImport.packageKey": packageInfo.packageKey })).toBe(1);
+
+    const publicResponse = await request(app).get(`/api/properties/${created.body.property.id}`);
+    expect(publicResponse.status).toBe(404);
+  });
+
+  it("moves a recheck import to Pending without changing existing Pending properties", async () => {
+    const { token } = await createAdminToken();
+    const existingPending = await Property.create({ title: "Existing Pending", status: "pending", published: false });
+    const imported = await Property.create({ title: "Imported", status: "recheck", published: false });
+
+    const moved = await request(app)
+      .patch(`/api/properties/admin/recheck-imports/${imported._id}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ action: "move_to_pending" });
+    expect(moved.status).toBe(200);
+    expect(moved.body.property.status).toBe("pending");
+    expect((await Property.findById(existingPending._id)).status).toBe("pending");
+  });
 });
 
 describe("GET /api/properties/:id", () => {

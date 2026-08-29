@@ -433,6 +433,13 @@ const propertySchema = new mongoose.Schema(
     transactionType: { type: String, default: "" },
     listingType: { type: String, enum: ["For Sale", "For Rent"], default: "For Sale" },
     submittedBy: { type: String, enum: ["user", "admin"], default: "admin" },
+    bulkImport: {
+      packageKey: { type: String, trim: true, maxlength: 600 },
+      packageName: { type: String, trim: true, maxlength: 300 },
+      packageSize: { type: Number, min: 0 },
+      batchName: { type: String, trim: true, maxlength: 300 },
+      importedAt: { type: Date },
+    },
     ageOfProperty: { type: String, default: "" },
     heroImages: {
       type: [{ type: String, trim: true }],
@@ -501,7 +508,7 @@ const propertySchema = new mongoose.Schema(
     published: { type: Boolean, default: true },
     status: {
       type: String,
-      enum: ["draft", "submitted", "under_review", "changes_requested", "resubmitted", "published", "rejected", "pending", "approved"],
+      enum: ["draft", "submitted", "under_review", "changes_requested", "resubmitted", "published", "rejected", "pending", "recheck", "approved"],
       default: "approved",
     },
     reviewMessages: { type: [reviewMessageSchema], default: [] },
@@ -580,6 +587,8 @@ propertySchema.index({
 
 // Default public listing: status equality + newest-first sort (ESR)
 propertySchema.index({ status: 1, createdAt: -1 });
+// Makes browser batch retries idempotent without affecting ordinary listings.
+propertySchema.index({ "bulkImport.packageKey": 1 }, { unique: true, sparse: true });
 // Relational link lookups + unset cascade (see propertyLinkSync)
 propertySchema.index({ builderId: 1 });
 // Numeric price range filter in /api/search
