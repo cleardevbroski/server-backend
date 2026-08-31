@@ -103,13 +103,16 @@ describe("project-location verification", () => {
     }
   });
 
-  it("blocks publication when entered coordinates are not admin verified", async () => {
+  it("allows an admin to publish while flagging unverified coordinates as a warning", async () => {
     const { token } = await createAdminToken();
     const property = await Property.create({
       title: "Unverified Map Project",
       propertyType: "Apartment",
+      transactionType: "New Property",
       builder: "Builder",
-      configurationDetails: [{ configuration: "2 BHK" }],
+      description: "A complete apartment project description that an administrator has reviewed before publication.",
+      possessionDetails: { status: "Ready to Move", launchDate: "2026-01-01" },
+      configurationDetails: [{ configuration: "2 BHK", price: "₹1 Cr", superBuiltUpArea: "1200 sqft", carpetArea: "900 sqft", bedrooms: 2, bathrooms: 2, balconies: 1, facings: ["East"] }],
       locality: { city: "Bengaluru", address: "Whitefield", latitude: 12.9698, longitude: 77.75 },
       status: "pending",
       published: false,
@@ -118,8 +121,10 @@ describe("project-location verification", () => {
       .patch(`/api/properties/${property._id}/workflow`)
       .set("Authorization", `Bearer ${token}`)
       .send({ action: "publish" });
-    expect(response.status).toBe(422);
-    expect(response.body.readiness.blockers).toContain("Verified project coordinates");
+    expect(response.status).toBe(200);
+    expect(response.body.property).toMatchObject({ status: "approved", published: true, verified: true });
+    expect(response.body.property.reviewReadiness.blockers).not.toContain("Project coordinate verification");
+    expect(response.body.property.reviewReadiness.warnings).toContain("Project coordinate verification");
   });
 
   it("invalidates verification and nearby map markers when coordinates change", async () => {

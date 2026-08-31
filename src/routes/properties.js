@@ -20,7 +20,7 @@ const {
 const { FACING_ERROR_MESSAGE, FACING_OPTIONS, normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
 const { normalizePropertySubmissionProfile, PropertySubmissionProfileError } = require("../utils/propertySubmissionProfile");
 const { sendPropertySubmissionEmail } = require("../services/emailService");
-const { PropertyWorkflowError, buildPropertyReviewReadiness, hasProjectCoordinates, hasVerifiedProjectLocation, resolveAdminWorkflowTransition } = require("../services/propertyAdminWorkflow");
+const { PropertyWorkflowError, buildPropertyReviewReadiness, resolveAdminWorkflowTransition } = require("../services/propertyAdminWorkflow");
 const { PROPERTY_DOCUMENT_MAX_BYTES, PROPERTY_WALKTHROUGH_MAX_BYTES } = require("../utils/propertyMediaLimits");
 
 const router = express.Router();
@@ -293,12 +293,6 @@ function verificationMatchesCoordinates(verification, latitude, longitude) {
   return verification && Number.isFinite(latitude) && Number.isFinite(longitude)
     && Math.abs(Number(verification.inputLatitude) - latitude) < 0.0000001
     && Math.abs(Number(verification.inputLongitude) - longitude) < 0.0000001;
-}
-
-function assertVerifiedLocationForPublication(property) {
-  if (hasProjectCoordinates(property) && !hasVerifiedProjectLocation(property)) {
-    throw new PropertyPayloadError("Analyze the project coordinates and confirm the exact location before publishing");
-  }
 }
 
 function reconcileLocationIntegrity(payload, body, existing) {
@@ -810,7 +804,6 @@ router.put(
         // Revalidate the complete project at approval time and persist any
         // legacy area labels into the canonical square-foot fields.
         property.set(prepareSubmittedPropertyPayload(property.toObject(), property));
-        assertVerifiedLocationForPublication(property);
         property.status = "published";
         property.verified = true;
         property.published = true;
@@ -1075,8 +1068,6 @@ router.post(
         postedDate: new Date().toISOString(),
       });
 
-      if (!savePending && hasTitle) assertVerifiedLocationForPublication(propertyData);
-
       const property = await Property.create(propertyData);
       await linkProperty(property);
 
@@ -1121,7 +1112,6 @@ router.put(
       );
       const updates = await convertPropertyMedia(includeAdminWorkflowFields(normalizedUpdates, req.body));
       existing.set(withMediaLedger(updates, existing));
-      if (!savePending) assertVerifiedLocationForPublication(existing);
       const property = await existing.save();
 
       if ("builderId" in req.body) {

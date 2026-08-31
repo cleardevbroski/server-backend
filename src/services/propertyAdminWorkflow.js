@@ -68,7 +68,7 @@ function buildPropertyReviewReadiness(property) {
     { key: "builder", label: "Builder / developer", passed: Boolean(text(source.builder)), severity: "blocker" },
     { key: "configuration", label: "Type-specific configuration", passed: configurations.length > 0, severity: "blocker" },
     { key: "rera", label: "RERA phase names and numbers", passed: hasValidRera, severity: "blocker" },
-    { key: "locationVerification", label: "Verified project coordinates", passed: !hasCoordinates || verifiedLocation, severity: "blocker" },
+    { key: "locationVerification", label: "Project coordinate verification", passed: !hasCoordinates || verifiedLocation, severity: "warning" },
     { key: "description", label: "Property description", passed: text(source.description).length >= 50, severity: "warning" },
     { key: "location", label: "City and address", passed: Boolean(text(source.locality?.city) && text(source.locality?.address)), severity: "warning" },
     { key: "locationCoordinates", label: "Project map coordinates", passed: hasCoordinates, severity: "warning" },
