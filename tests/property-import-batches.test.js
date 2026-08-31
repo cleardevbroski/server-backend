@@ -51,6 +51,27 @@ describe("property folder import reports", () => {
 });
 
 describe("staged property template parser", () => {
+  it("recovers apartment variants and calculated prices from verified floor-plan labels", () => {
+    const staged = {
+      propertyUploadText: `[PROPERTY BASICS]\nProperty Type: Apartment\nProject / Property Name: Cumins Sanctum\nBuilder / Developer: Cumins Estates\nTransaction Type: New Property\nListing Type: For Sale\n\n[CONFIGURATION]\nConfiguration Name: 2 BHK\nPrice:\nBuilt-up Area: 1959 sq. ft.\nCarpet Area:\nBedrooms: 2\nBathrooms:\nBalconies:`,
+      projectData: { key_details: [["Price Per Sq. Ft.", "14500"]] },
+      assetManifest: [
+        { kind: "3d_plan", status: "approved", label: "Floor plan of 2 BHK 966 Sq. Ft. Apartment", saved_as: "2-bhk-966.jpg" },
+        { kind: "3d_plan", status: "approved", label: "Floor plan of 3 BHK 1590 Sq. Ft. Apartment", saved_as: "3-bhk-1590.jpg" },
+        { kind: "3d_plan", status: "approved", label: "Floor plan of 3 BHK 1836 Sq. Ft. Apartment", saved_as: "3-bhk-1836.jpg" },
+      ],
+      validation: { warnings: [] },
+      reraPhases: [],
+    };
+    const { payload, warnings } = parsePropertyTemplate(staged);
+    expect(payload.configurationDetails).toEqual([
+      expect.objectContaining({ configuration: "2 BHK", builtUpArea: "966 Sq. Ft.", price: "₹ 1.40 Cr", carpetArea: "" }),
+      expect.objectContaining({ configuration: "3 BHK", builtUpArea: "1590 Sq. Ft.", price: "₹ 2.31 Cr", carpetArea: "" }),
+      expect.objectContaining({ configuration: "3 BHK", builtUpArea: "1836 Sq. Ft.", price: "₹ 2.66 Cr", carpetArea: "" }),
+    ]);
+    expect(warnings).toContain("2 BHK: missing carpet area, bathrooms, balconies.");
+  });
+
   it("preserves configurations, every RERA phase, official details and project content", () => {
     const staged = {
       propertyUploadText: `[PROPERTY BASICS]\nProperty Type: Apartment\nProject / Property Name: Project One\nBuilder / Developer: Builder One\nTransaction Type: New Property\nListing Type: For Sale\n\n[RERA]\nRERA Registered: Yes\n\n[RERA PHASE]\nPhase Name: Phase A\nRERA Number: PRM/KA/A\n\n[RERA PHASE]\nPhase Name: Phase B\nRERA Number: PRM/KA/B\n\n[CONFIGURATION]\nConfiguration Name: 2 BHK\nPrice: ₹ 1 Cr\nBuilt-up Area: 1200 Sq. Ft.\nCarpet Area: 900 Sq. Ft.\nBedrooms: 2\nBathrooms: 2\nBalconies: 1\nFacings: East, North\n\n[PROJECT INTRODUCTION]\nParagraph: Verified introduction.\n\n[WHY INVEST]\nReason: Limited inventory.\n\n[FAQ]\nQuestion: Where is the project?\nAnswer: Bengaluru.`,

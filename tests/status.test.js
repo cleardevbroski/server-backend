@@ -242,6 +242,34 @@ describe("Property status workflow", () => {
     expect(response.body.property.reraPhases[0].reraDocuments[0].key).toBe("rera-registration-certificate-5");
     expect(response.body.property.reraPhases[0].projectDocuments[0].key).toBe("portal-project-plan-6");
   });
+
+  it("lets an admin publish reviewed imports with half-BHK labels and unavailable optional configuration facts", async () => {
+    const { token } = await createAdminToken();
+    const property = await Property.create({
+      title: "Reviewed Imported Apartment",
+      builder: "Imported Builder",
+      propertyType: "Apartment",
+      transactionType: "New Property",
+      description: "An imported apartment project whose available source facts have been reviewed by an administrator.",
+      possessionDetails: { status: "Under Construction", expectedCompletionDate: "" },
+      status: "recheck",
+      published: false,
+      submittedBy: "admin",
+      bulkImport: { packageKey: "reviewed.zip::100", packageName: "reviewed.zip", packageSize: 100, batchKey: "reviewed-batch", importState: "complete" },
+      configs: ["3.5 BHK"],
+      configurationDetails: [{ configuration: "3.5 BHK", builtUpArea: "1800 Sq. Ft.", bedrooms: 3, facings: [] }],
+    });
+
+    const response = await request(app)
+      .patch(`/api/properties/${property._id}/workflow`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ action: "publish" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.property).toMatchObject({ status: "approved", published: true, verified: true });
+    expect(response.body.property.configurationDetails[0]).toMatchObject({ configuration: "3.5 BHK", builtUpArea: "1800 Sq. Ft." });
+    expect(response.body.property.reviewReadiness.warnings).toEqual(expect.arrayContaining(["Configuration prices", "Configuration carpet areas", "Configuration bathroom and balcony counts", "Possession timeline"]));
+  });
 });
 
 describe("GET /api/properties/:id", () => {

@@ -61,6 +61,13 @@ function buildPropertyReviewReadiness(property) {
   const photos = mediaCount(source);
   const hasCoordinates = hasProjectCoordinates(source);
   const verifiedLocation = hasVerifiedProjectLocation(source);
+  const missingConfigurationPrices = configurations.some((row) => !text(row.price));
+  const missingConfigurationCarpetAreas = source.propertyType === "Apartment" && configurations.some((row) => !text(row.carpetArea));
+  const missingConfigurationRoomCounts = source.propertyType === "Apartment" && configurations.some((row) => row.bathrooms === undefined || row.balconies === undefined);
+  const possession = source.possessionDetails;
+  const missingPossessionTimeline = possession?.status === "Under Construction"
+    ? !text(possession.expectedCompletionDate)
+    : ["Ready to Move", "New Launch"].includes(possession?.status) && !text(possession.launchDate);
   const hasValidRera = !source.reraRegistered || (phases.length > 0 && phases.every((phase) => text(phase.name) && text(phase.reraNumber).length >= 8));
   const checks = [
     { key: "title", label: "Project name", passed: Boolean(text(source.title)), severity: "blocker" },
@@ -72,6 +79,10 @@ function buildPropertyReviewReadiness(property) {
     { key: "description", label: "Property description", passed: text(source.description).length >= 50, severity: "warning" },
     { key: "location", label: "City and address", passed: Boolean(text(source.locality?.city) && text(source.locality?.address)), severity: "warning" },
     { key: "locationCoordinates", label: "Project map coordinates", passed: hasCoordinates, severity: "warning" },
+    { key: "configurationPrices", label: "Configuration prices", passed: !missingConfigurationPrices, severity: "warning" },
+    { key: "configurationCarpetAreas", label: "Configuration carpet areas", passed: !missingConfigurationCarpetAreas, severity: "warning" },
+    { key: "configurationRoomCounts", label: "Configuration bathroom and balcony counts", passed: !missingConfigurationRoomCounts, severity: "warning" },
+    { key: "possessionTimeline", label: "Possession timeline", passed: !missingPossessionTimeline, severity: "warning" },
     { key: "price", label: "Property price", passed: Boolean(text(source.price)), severity: "warning" },
     { key: "photos", label: "Property photos", passed: photos > 0, severity: "warning" },
     { key: "documents", label: "RERA / project documents", passed: !source.reraRegistered || documents > 0, severity: "warning" },

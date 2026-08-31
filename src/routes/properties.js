@@ -80,7 +80,7 @@ async function convertPropertyMedia(body) {
   return converted;
 }
 
-function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
+function normalizeStructuredPayload(body, { requireStructured = false, allowReviewedImportGaps = false } = {}) {
   let normalizedBody = body;
   if (body.heroImages !== undefined) {
     if (!Array.isArray(body.heroImages)) throw new PropertyPayloadError("Main display photos must be an array");
@@ -88,7 +88,7 @@ function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
     if (heroImages.length > 3) throw new PropertyPayloadError("Project overview supports a maximum of 3 main photos");
     normalizedBody = { ...body, heroImages: [...new Set(heroImages)] };
   }
-  if (normalizedBody.propertyType === "Apartment") return normalizeApartmentPayload(normalizedBody, { requireStructured });
+  if (normalizedBody.propertyType === "Apartment") return normalizeApartmentPayload(normalizedBody, { requireStructured, allowReviewedImportGaps });
   if (normalizedBody.propertyType === "Villa") return normalizeVillaPayload(normalizedBody, { requireStructured });
   if (normalizedBody.propertyType === "Plot") return normalizePlotPayload(normalizedBody, { requireStructured });
   if (normalizedBody.propertyType === "Commercial") return normalizeCommercialPayload(normalizedBody, { requireStructured });
@@ -380,7 +380,10 @@ function prepareSubmittedPropertyPayload(body, existing) {
   const structuredTypes = new Set(["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living"]);
   const incoming = { ...compact, propertyType: compact.propertyType || existing?.propertyType };
   if (hasStructuredDetails(existing ? incoming : candidate)) {
-    const normalized = withoutWorkflowFields(normalizeStructuredPayload(candidate, { requireStructured: true }));
+    const normalized = withoutWorkflowFields(normalizeStructuredPayload(candidate, {
+      requireStructured: true,
+      allowReviewedImportGaps: Boolean(existing?.bulkImport?.packageKey),
+    }));
     if (importedPhaseDocuments && Array.isArray(normalized.reraPhases)) {
       normalized.reraPhases = normalized.reraPhases.map((phase) => {
         const source = importedPhaseDocuments.find((item) => item.reraNumber === phase.reraNumber)

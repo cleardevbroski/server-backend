@@ -86,11 +86,11 @@ function normalizeKarnatakaReraUrl(value) {
 }
 
 function normalizeConfiguration(value) {
-  const match = String(value || "")
-    .trim()
-    .match(/^(\d+)\s*bhk$/i);
+  const source = String(value || "").trim();
+  if (/^studio(?:\s+\d+(?:\.\d+)?\s*(?:sq\.?\s*ft\.?|sqft))?$/i.test(source)) return "Studio";
+  const match = source.match(/^(\d+(?:\.5)?)\s*bhk$/i);
   if (!match || Number(match[1]) < 1) {
-    throw new PropertyPayloadError("Configurations must use a positive whole-number BHK label, for example 2 BHK");
+    throw new PropertyPayloadError("Configurations must use Studio or a positive BHK label, for example 2 BHK or 3.5 BHK");
   }
   return `${Number(match[1])} BHK`;
 }
@@ -618,7 +618,7 @@ function validateNearbyDetails(nearbyDetails) {
   return result;
 }
 
-function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
+function normalizeApartmentPayload(input, { requireStructured = false, allowReviewedImportGaps = false } = {}) {
   const payload = { ...input };
   const hasStructured = Array.isArray(payload.configurationDetails);
   if (!hasStructured && !requireStructured) return payload;
@@ -635,14 +635,16 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
     return {
       id: String(row.id || `${configuration}-${index + 1}`).trim(),
       configuration,
-      price: requireText(row.price, `${configuration} price`),
+      price: allowReviewedImportGaps ? optionalPositiveDisplay(row.price, `${configuration} price`, "price") : requireText(row.price, `${configuration} price`),
       // Kept only for backwards compatibility with already-published records.
       superBuiltUpArea: String(row.superBuiltUpArea || "").trim(),
-      carpetArea: requireText(row.carpetArea, `${configuration} carpet area`),
+      carpetArea: allowReviewedImportGaps ? optionalPositiveDisplay(row.carpetArea, `${configuration} carpet area`) : requireText(row.carpetArea, `${configuration} carpet area`),
       builtUpArea: String(row.builtUpArea || "").trim(),
-      bedrooms: requireInteger(row.bedrooms, `${configuration} bedrooms`, 1),
-      bathrooms: requireInteger(row.bathrooms, `${configuration} bathrooms`, 1),
-      balconies: requireInteger(row.balconies, `${configuration} balconies`, 0),
+      bedrooms: allowReviewedImportGaps
+        ? configuration === "Studio" ? 0 : optionalInteger(row.bedrooms, `${configuration} bedrooms`, 1)
+        : requireInteger(row.bedrooms, `${configuration} bedrooms`, configuration === "Studio" ? 0 : 1),
+      bathrooms: allowReviewedImportGaps ? optionalInteger(row.bathrooms, `${configuration} bathrooms`, 0) : requireInteger(row.bathrooms, `${configuration} bathrooms`, 1),
+      balconies: allowReviewedImportGaps ? optionalInteger(row.balconies, `${configuration} balconies`, 0) : requireInteger(row.balconies, `${configuration} balconies`, 0),
       facings,
       floorPlan2dUrl: optionalAssetUrl(row.floorPlan2dUrl, `${configuration} 2D floor plan`),
       floorPlan3dUrl: optionalAssetUrl(row.floorPlan3dUrl, `${configuration} 3D floor plan`),
@@ -663,10 +665,10 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   }
   const isUnderConstruction = possession.status === "Under Construction";
   if (isUnderConstruction) {
-    if (!isCompletionMonth(possession.expectedCompletionDate) || possession.launchDate) {
+    if ((!allowReviewedImportGaps && !isCompletionMonth(possession.expectedCompletionDate)) || (possession.expectedCompletionDate && !isCompletionMonth(possession.expectedCompletionDate)) || possession.launchDate) {
       throw new PropertyPayloadError("Under Construction requires only an expected completion month and year");
     }
-  } else if (!isCalendarDate(possession.launchDate) || possession.expectedCompletionDate) {
+  } else if ((!allowReviewedImportGaps && !isCalendarDate(possession.launchDate)) || (possession.launchDate && !isCalendarDate(possession.launchDate)) || possession.expectedCompletionDate) {
     throw new PropertyPayloadError(`${possession.status} requires only a launch date`);
   }
 
@@ -693,8 +695,10 @@ function normalizeApartmentPayload(input, { requireStructured = false } = {}) {
   payload.ageOfProperty = possession.status === "Under Construction" ? "Under Construction" : "";
   payload.price = deriveRange(rows, "price") || payload.price;
   payload.area = deriveRange(rows, "builtUpArea") || deriveRange(rows, "superBuiltUpArea") || deriveRange(rows, "carpetArea") || payload.area;
-  payload.bedrooms = Math.min(...rows.map((row) => row.bedrooms));
-  payload.bathrooms = Math.min(...rows.map((row) => row.bathrooms));
+  const bedroomCounts = rows.map((row) => row.bedrooms).filter(Number.isFinite);
+  const bathroomCounts = rows.map((row) => row.bathrooms).filter(Number.isFinite);
+  payload.bedrooms = bedroomCounts.length ? Math.min(...bedroomCounts) : undefined;
+  payload.bathrooms = bathroomCounts.length ? Math.min(...bathroomCounts) : undefined;
   payload.facing = rows.find((row) => row.facings.length)?.facings.join(", ") || "";
   return payload;
 }

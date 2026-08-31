@@ -75,8 +75,62 @@ function importedFacings(value) {
 }
 
 function configurationName(value) {
-  const match = clean(value).match(/\b(\d+(?:\.5)?)\s*BHK\b/i);
-  return match ? `${Number(match[1])} BHK` : clean(value);
+  const source = clean(value);
+  if (/\bstudio\b/i.test(source)) return "Studio";
+  const match = source.match(/\b(\d+(?:\.5)?)\s*BHK\b/i);
+  return match ? `${Number(match[1])} BHK` : source;
+}
+
+function keyDetailValue(data, expectedLabel) {
+  const expected = clean(expectedLabel).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const row = (Array.isArray(data?.key_details) ? data.key_details : []).find((item) => {
+    const label = Array.isArray(item) ? item[0] : item?.label;
+    return clean(label).toLowerCase().replace(/[^a-z0-9]/g, "") === expected;
+  });
+  return clean(Array.isArray(row) ? row[1] : row?.value);
+}
+
+function formatIndianPrice(rupees) {
+  if (!Number.isFinite(rupees) || rupees <= 0) return "";
+  if (rupees >= 10_000_000) return `₹ ${(rupees / 10_000_000).toFixed(2)} Cr`;
+  if (rupees >= 100_000) return `₹ ${(rupees / 100_000).toFixed(2)} Lac`;
+  return `₹ ${Math.round(rupees).toLocaleString("en-IN")}`;
+}
+
+function configurationCandidatesFromMedia(staged) {
+  const seen = new Set();
+  return (Array.isArray(staged.assetManifest) ? staged.assetManifest : []).flatMap((row) => {
+    if (!/^(?:approved|downloaded)$/i.test(clean(row?.status)) || !/^(?:floor_plan|3d_plan)$/i.test(clean(row?.kind))) return [];
+    const source = `${clean(row.label)} ${clean(row.saved_as)}`;
+    const bhk = source.match(/\b(\d+(?:\.5)?)\s*BHK\b/i)?.[1];
+    const studio = /\bstudio\b/i.test(source);
+    const area = source.replace(/,/g, "").match(/\b(\d{3,5}(?:\.\d+)?)\s*(?:Sq\.?\s*Ft\.?|sqft)\b/i)?.[1];
+    if ((!bhk && !studio) || !area) return [];
+    const configuration = studio ? "Studio" : `${Number(bhk)} BHK`;
+    const key = `${configuration.toLowerCase()}:${Number(area)}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ configuration, builtUpArea: `${Number(area)} Sq. Ft.`, bedrooms: studio ? 0 : Math.floor(Number(bhk)) }];
+  });
+}
+
+function enrichConfigurationsFromPackage(staged, sourceRows) {
+  const candidates = configurationCandidatesFromMedia(staged);
+  if (!candidates.length) return sourceRows;
+  const rate = number(keyDetailValue(staged.projectData, "Price Per Sq. Ft."));
+  return candidates.map((candidate) => {
+    const source = sourceRows.find((row) => row.configuration === candidate.configuration) || {};
+    const area = number(candidate.builtUpArea);
+    return {
+      ...source,
+      ...candidate,
+      price: clean(source.price) || (rate && area ? formatIndianPrice(rate * area) : ""),
+      carpetArea: clean(source.carpetArea),
+      bathrooms: source.bathrooms,
+      balconies: source.balconies,
+      facings: source.facings || [],
+    };
+  });
 }
 
 function officialDetails(details = {}) {
@@ -123,20 +177,22 @@ function parsePropertyTemplate(staged) {
   const type = normalizePropertyType(labelled(basics, "Property Type")) || "Apartment";
   const warnings = [...(staged.validation?.warnings || [])];
   const configBlocks = exactSections(source, "CONFIGURATION");
-  const configurations = configBlocks.map((block) => {
+  const sourceConfigurations = configBlocks.map((block) => {
     const rawName = labelled(block, "Configuration Name") || labelled(block, "BHK Configuration") || labelled(block, "BHK");
+    const configuration = configurationName(rawName);
     return {
-      configuration: configurationName(rawName),
+      configuration,
       price: labelled(block, "Price"),
       builtUpArea: labelled(block, "Built-up Area"),
       carpetArea: labelled(block, "Carpet Area"),
       superBuiltUpArea: labelled(block, "Super Area"),
-      bedrooms: number(labelled(block, "Bedrooms")) || number(rawName),
+      bedrooms: configuration === "Studio" ? 0 : number(labelled(block, "Bedrooms")) || number(configuration),
       bathrooms: number(labelled(block, "Bathrooms")),
       balconies: number(labelled(block, "Balconies")),
       facings: importedFacings(labelled(block, "Facings") || labelled(block, "Facing")),
     };
   }).filter((row) => row.configuration);
+  const configurations = enrichConfigurationsFromPackage(staged, sourceConfigurations);
 
   const phaseBlocks = exactSections(source, "RERA PHASE");
   const stagedPhases = staged.reraPhases || [];
