@@ -12,6 +12,8 @@ const mongoose = require("mongoose");
 // Require every model so it registers on the connection before we sync.
 const models = {
   Property: require("../src/models/Property"),
+  PropertyImportBatch: require("../src/models/PropertyImportBatch"),
+  GeocodeCache: require("../src/models/GeocodeCache"),
   Builder: require("../src/models/Builder"),
   Dealer: require("../src/models/Dealer"),
   User: require("../src/models/User"),

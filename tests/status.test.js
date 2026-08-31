@@ -148,6 +148,100 @@ describe("Property status workflow", () => {
     expect(moved.body.property.status).toBe("pending");
     expect((await Property.findById(existingPending._id)).status).toBe("pending");
   });
+
+  it("keeps status, publication and verification flags consistent through admin workflow actions", async () => {
+    const { token } = await createAdminToken();
+    const property = await Property.create({
+      title: "Workflow Apartment",
+      builder: "Workflow Builder",
+      propertyType: "Apartment",
+      transactionType: "New Property",
+      description: "A complete workflow apartment description with enough verified project information for publishing.",
+      possessionDetails: { status: "Ready to Move", launchDate: "2026-01-01" },
+      reraRegistered: false,
+      status: "pending",
+      published: false,
+      verified: false,
+      submittedBy: "admin",
+      configurationDetails: [{ configuration: "2 BHK", price: "₹1 Cr", superBuiltUpArea: "1200 sqft", carpetArea: "900 sqft", bedrooms: 2, bathrooms: 2, balconies: 1, facings: ["East"] }],
+    });
+
+    const published = await request(app)
+      .patch(`/api/properties/${property._id}/workflow`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ action: "publish" });
+    expect(published.status).toBe(200);
+    expect(published.body.property).toMatchObject({ status: "approved", published: true, verified: true });
+    expect(published.body.property.workflowHistory).toHaveLength(1);
+    expect(published.body.property.workflowHistory[0]).toMatchObject({ fromStatus: "pending", toStatus: "approved", action: "publish" });
+
+    const pending = await request(app)
+      .patch(`/api/properties/${property._id}/workflow`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ action: "move_to_pending" });
+    expect(pending.status).toBe(200);
+    expect(pending.body.property).toMatchObject({ status: "pending", published: false, verified: false });
+    expect(pending.body.property.workflowHistory).toHaveLength(2);
+  });
+
+  it("blocks publishing when required admin review checks are missing", async () => {
+    const { token } = await createAdminToken();
+    const property = await Property.create({ title: "Incomplete Import", propertyType: "Apartment", status: "recheck", published: false, submittedBy: "admin" });
+
+    const response = await request(app)
+      .patch(`/api/properties/${property._id}/workflow`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ action: "publish" });
+
+    expect(response.status).toBe(422);
+    expect(response.body.readiness.canPublish).toBe(false);
+    expect(response.body.readiness.blockers).toEqual(expect.arrayContaining(["Builder / developer", "Type-specific configuration"]));
+    expect((await Property.findById(property._id)).status).toBe("recheck");
+  });
+
+  it("includes review readiness on authenticated admin property lists", async () => {
+    const { token } = await createAdminToken();
+    await Property.create({ title: "Readiness Import", propertyType: "Apartment", status: "recheck", published: false, submittedBy: "admin" });
+    const response = await request(app).get("/api/properties/admin?status=recheck").set("Authorization", `Bearer ${token}`);
+    expect(response.body.error).toBeUndefined();
+    expect(response.status).toBe(200);
+    expect(response.body.properties[0].reviewReadiness).toMatchObject({ canPublish: false });
+  });
+
+  it("publishes imported projects without discarding portal-specific RERA document keys", async () => {
+    const { token } = await createAdminToken();
+    const property = await Property.create({
+      title: "Imported RERA Apartment",
+      builder: "RERA Builder",
+      propertyType: "Apartment",
+      transactionType: "New Property",
+      description: "A complete imported apartment description containing verified project information for publishing.",
+      possessionDetails: { status: "Ready to Move", launchDate: "2026-01-01" },
+      status: "recheck",
+      published: false,
+      submittedBy: "admin",
+      bulkImport: { packageKey: "rera-project.zip::100", packageName: "RERA Project.zip", packageSize: 100, batchKey: "test-batch", importState: "complete" },
+      configurationDetails: [{ configuration: "2 BHK", price: "₹1 Cr", superBuiltUpArea: "1200 sqft", carpetArea: "900 sqft", bedrooms: 2, bathrooms: 2, balconies: 1, facings: ["East"] }],
+      reraRegistered: true,
+      reraNumber: "PRM/KA/RERA/12345678",
+      reraPhases: [{
+        name: "Phase 1",
+        reraNumber: "PRM/KA/RERA/12345678",
+        reraDocuments: [{ key: "rera-registration-certificate-5", label: "RERA Registration Certificate", fileName: "certificate.pdf", fileUrl: "https://res.cloudinary.com/demo/raw/upload/certificate.pdf", mimeType: "application/pdf", fileSize: 1024 }],
+        projectDocuments: [{ key: "portal-project-plan-6", label: "Portal Project Plan", fileName: "plan.pdf", fileUrl: "https://res.cloudinary.com/demo/raw/upload/plan.pdf", mimeType: "application/pdf", fileSize: 2048 }],
+      }],
+    });
+
+    const response = await request(app)
+      .patch(`/api/properties/${property._id}/workflow`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ action: "publish" });
+
+    expect(response.body.error).toBeUndefined();
+    expect(response.status).toBe(200);
+    expect(response.body.property.reraPhases[0].reraDocuments[0].key).toBe("rera-registration-certificate-5");
+    expect(response.body.property.reraPhases[0].projectDocuments[0].key).toBe("portal-project-plan-6");
+  });
 });
 
 describe("GET /api/properties/:id", () => {

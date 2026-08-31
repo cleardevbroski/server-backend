@@ -91,6 +91,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/property-auth", require("./routes/propertyAuth"));
 app.use("/api/login-reports", require("./routes/loginReports"));
 app.use("/api/properties", propertyRoutes);
+app.use("/api/property-import-batches", require("./routes/propertyImportBatches"));
 app.use("/api/geocoding", require("./routes/geocoding"));
 app.use("/api/dealers", dealerRoutes);
 app.use("/api/builders", builderRoutes);

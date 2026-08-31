@@ -20,6 +20,7 @@ const {
 const { FACING_ERROR_MESSAGE, FACING_OPTIONS, normalizeApartmentPayload, normalizeVillaPayload, normalizePlotPayload, normalizeCommercialPayload, normalizePgPayload, normalizeKarnatakaReraUrl, PropertyPayloadError } = require("../utils/propertyPayload");
 const { normalizePropertySubmissionProfile, PropertySubmissionProfileError } = require("../utils/propertySubmissionProfile");
 const { sendPropertySubmissionEmail } = require("../services/emailService");
+const { PropertyWorkflowError, buildPropertyReviewReadiness, hasProjectCoordinates, hasVerifiedProjectLocation, resolveAdminWorkflowTransition } = require("../services/propertyAdminWorkflow");
 const { PROPERTY_DOCUMENT_MAX_BYTES, PROPERTY_WALKTHROUGH_MAX_BYTES } = require("../utils/propertyMediaLimits");
 
 const router = express.Router();
@@ -97,7 +98,7 @@ function normalizeStructuredPayload(body, { requireStructured = false } = {}) {
 
 function withoutWorkflowFields(body) {
   const clean = { ...body };
-  for (const key of ["_id", "id", "postedBy", "propertyPoster", "submissionProfile", "status", "published", "verified", "reviewMessages", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed", "bulkImport"]) {
+  for (const key of ["_id", "id", "postedBy", "propertyPoster", "submissionProfile", "status", "published", "verified", "reviewMessages", "workflowHistory", "reviewedBy", "reviewedAt", "publishedAt", "rejectionReason", "submissionVersion", "lastSubmittedAt", "createdAt", "updatedAt", "mediaAssets", "mediaRemovalConfirmed", "bulkImport"]) {
     delete clean[key];
   }
   delete clean.maintenanceCharges;
@@ -142,9 +143,9 @@ function presentSubmissionProfile(profile) {
   };
 }
 
-function presentProperty(property, { includeDocumentUrls = false, includeSubmissionProfile = false } = {}) {
+function presentProperty(property, { includeDocumentUrls = false, includeSubmissionProfile = false, includeReviewReadiness = false, includeWorkflowHistory = false } = {}) {
   const source = typeof property.toObject === "function" ? property.toObject() : property;
-  const { heroVideo, videos, virtualTourUrl, mediaAssets, submissionProfile, propertyPoster, ...visibleProperty } = source;
+  const { heroVideo, videos, virtualTourUrl, mediaAssets, submissionProfile, propertyPoster, workflowHistory, ...visibleProperty } = source;
   if (!includeDocumentUrls && Array.isArray(visibleProperty.reraPhases)) {
     visibleProperty.reraPhases = visibleProperty.reraPhases.map((phase) => ({
       ...phase,
@@ -158,6 +159,8 @@ function presentProperty(property, { includeDocumentUrls = false, includeSubmiss
   return {
     ...visibleProperty,
     ...(includeSubmissionProfile ? { submissionProfile: presentSubmissionProfile(submissionProfile), propertyPoster } : {}),
+    ...(includeReviewReadiness ? { reviewReadiness: buildPropertyReviewReadiness(source) } : {}),
+    ...(includeWorkflowHistory ? { workflowHistory: workflowHistory || [] } : {}),
     id: source._id.toString(),
   };
 }
@@ -278,7 +281,48 @@ function propertyPricePerSqft(property) {
   return price > 0 && area > 0 ? price / area : Number.NaN;
 }
 
-function prepareOptionalPropertyPayload(body) {
+function clearNearbyMapResolutions(nearbyDetails) {
+  if (!nearbyDetails || typeof nearbyDetails !== "object") return nearbyDetails;
+  return Object.fromEntries(Object.entries(nearbyDetails).map(([category, detail]) => [category, {
+    ...detail,
+    ...(Array.isArray(detail?.places) ? { places: detail.places.map(({ latitude, longitude, osmId, mapUrl, resolvedAddress, approximateDistanceMeters, ...place }) => place) } : {}),
+  }]));
+}
+
+function verificationMatchesCoordinates(verification, latitude, longitude) {
+  return verification && Number.isFinite(latitude) && Number.isFinite(longitude)
+    && Math.abs(Number(verification.inputLatitude) - latitude) < 0.0000001
+    && Math.abs(Number(verification.inputLongitude) - longitude) < 0.0000001;
+}
+
+function assertVerifiedLocationForPublication(property) {
+  if (hasProjectCoordinates(property) && !hasVerifiedProjectLocation(property)) {
+    throw new PropertyPayloadError("Analyze the project coordinates and confirm the exact location before publishing");
+  }
+}
+
+function reconcileLocationIntegrity(payload, body, existing) {
+  if (!body?.locality || typeof body.locality !== "object") return payload;
+  const latitude = Number(payload.locality?.latitude);
+  const longitude = Number(payload.locality?.longitude);
+  const hasCoordinates = Number.isFinite(latitude) && Number.isFinite(longitude);
+  const existingLatitude = Number(existing?.locality?.latitude);
+  const existingLongitude = Number(existing?.locality?.longitude);
+  const changed = Boolean(existing) && (
+    hasCoordinates !== (Number.isFinite(existingLatitude) && Number.isFinite(existingLongitude))
+    || (hasCoordinates && (Math.abs(latitude - existingLatitude) >= 0.0000001 || Math.abs(longitude - existingLongitude) >= 0.0000001))
+  );
+  if (!hasCoordinates || !verificationMatchesCoordinates(payload.locationVerification, latitude, longitude)) {
+    payload.locationVerification = undefined;
+  }
+  if (changed) {
+    const nearbySource = payload.nearbyDetails || existing?.nearbyDetails?.toObject?.() || existing?.nearbyDetails;
+    payload.nearbyDetails = clearNearbyMapResolutions(nearbySource);
+  }
+  return payload;
+}
+
+function prepareOptionalPropertyPayload(body, existing) {
   const payload = compactPropertyPayload(withoutWorkflowFields(body)) || {};
   if (Array.isArray(payload.reraPhases)) {
     payload.reraPhases = payload.reraPhases.map((phase) => ({
@@ -288,7 +332,7 @@ function prepareOptionalPropertyPayload(body) {
   }
   assertPropertyTypeIsSupported(payload.propertyType);
   assertOptionalVillaFacings(payload);
-  return payload;
+  return reconcileLocationIntegrity(payload, body, existing);
 }
 
 function hasStructuredDetails(body) {
@@ -305,7 +349,7 @@ function hasStructuredDetails(body) {
 /** Sparse submissions remain allowed, but once a structured workflow is
  * present it is normalized and validated as a complete unit. */
 function prepareSubmittedPropertyPayload(body, existing) {
-  const compact = prepareOptionalPropertyPayload(body);
+  const compact = prepareOptionalPropertyPayload(body, existing);
   if (Object.prototype.hasOwnProperty.call(body, "builderId")) compact.builderId = body.builderId || null;
   if (Object.prototype.hasOwnProperty.call(body, "homepageSections")) {
     if (!Array.isArray(body.homepageSections)) {
@@ -316,6 +360,23 @@ function prepareSubmittedPropertyPayload(body, existing) {
   const candidate = existing
     ? { ...withoutWorkflowFields(existing.toObject()), ...compact, propertyType: compact.propertyType || existing.propertyType }
     : compact;
+  // Direct batch imports preserve every official RERA file, including split
+  // PDF parts and portal-specific categories that do not exist in the manual
+  // upload dropdown. Validate the phase metadata normally, then restore those
+  // already-uploaded document records before saving.
+  const existingPhases = existing?.reraPhases?.toObject ? existing.reraPhases.toObject() : existing?.toObject?.().reraPhases;
+  const importedPhaseDocuments = existing?.bulkImport?.packageKey && Array.isArray(existingPhases)
+    ? existingPhases.map((phase) => ({
+      _id: phase._id,
+      name: phase.name,
+      reraNumber: phase.reraNumber,
+      reraDocuments: phase.reraDocuments || [],
+      projectDocuments: phase.projectDocuments || [],
+    }))
+    : null;
+  if (importedPhaseDocuments) {
+    candidate.reraPhases = candidate.reraPhases.map(({ _id, ...phase }) => ({ ...phase, reraDocuments: [], projectDocuments: [] }));
+  }
   assertPropertyTypeIsSupported(candidate.propertyType);
   if (existing) {
     delete candidate.heroVideo;
@@ -325,7 +386,15 @@ function prepareSubmittedPropertyPayload(body, existing) {
   const structuredTypes = new Set(["Apartment", "Villa", "Plot", "Commercial", "PG/Co-living"]);
   const incoming = { ...compact, propertyType: compact.propertyType || existing?.propertyType };
   if (hasStructuredDetails(existing ? incoming : candidate)) {
-    return withoutWorkflowFields(normalizeStructuredPayload(candidate, { requireStructured: true }));
+    const normalized = withoutWorkflowFields(normalizeStructuredPayload(candidate, { requireStructured: true }));
+    if (importedPhaseDocuments && Array.isArray(normalized.reraPhases)) {
+      normalized.reraPhases = normalized.reraPhases.map((phase) => {
+        const source = importedPhaseDocuments.find((item) => item.reraNumber === phase.reraNumber)
+          || importedPhaseDocuments.find((item) => item.name === phase.name);
+        return source ? { ...phase, ...(source._id ? { _id: source._id } : {}), reraDocuments: source.reraDocuments, projectDocuments: source.projectDocuments } : phase;
+      });
+    }
+    return normalized;
   }
   if (compact.propertyType && !structuredTypes.has(compact.propertyType)) {
     for (const key of ["configurationDetails", "villaDetails", "plotDetails", "commercialDetails", "pgDetails", "rentDetails", "leaseDetails", "possessionDetails"]) {
@@ -334,6 +403,38 @@ function prepareSubmittedPropertyPayload(body, existing) {
     return withoutWorkflowFields(candidate);
   }
   return existing ? compact : withoutWorkflowFields(candidate);
+}
+
+async function applyAdminPropertyWorkflow(property, action, admin, note = "") {
+  const { current, target } = resolveAdminWorkflowTransition(property, action);
+  const readiness = buildPropertyReviewReadiness(property);
+  if (action === "publish" && !readiness.canPublish) {
+    throw new PropertyWorkflowError(`Cannot publish until these required checks are corrected: ${readiness.blockers.join(", ")}`, 422, readiness);
+  }
+  if (action === "publish") {
+    property.set(prepareSubmittedPropertyPayload(property.toObject(), property));
+    property.status = "approved";
+    property.published = true;
+    property.verified = true;
+    property.publishedAt = new Date();
+    property.rejectionReason = "";
+  } else {
+    property.status = target;
+    property.published = false;
+    property.verified = false;
+    property.rejectionReason = action === "reject" ? String(note || "Rejected during admin review").trim().slice(0, 1000) : "";
+  }
+  property.reviewedBy = admin?._id || admin || null;
+  property.reviewedAt = new Date();
+  property.workflowHistory.push({
+    fromStatus: current,
+    toStatus: property.status,
+    action,
+    note: String(note || "").trim().slice(0, 1000),
+    actor: admin?._id || admin || null,
+  });
+  await property.save();
+  return buildPropertyReviewReadiness(property);
 }
 
 function includeAdminWorkflowFields(payload, body) {
@@ -489,7 +590,7 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
     ]);
 
     // Map _id to id for frontend compatibility
-    const mapped = properties.map(presentProperty);
+    const mapped = properties.map((property) => presentProperty(property, { includeReviewReadiness: true }));
 
     return res.json({
       properties: mapped,
@@ -589,23 +690,11 @@ router.patch("/admin/recheck-imports/:id", auth, adminOnly, async (req, res) => 
     if (!["move_to_pending", "publish"].includes(action)) return res.status(400).json({ error: "Choose move_to_pending or publish" });
     const property = await Property.findOne({ _id: req.params.id, status: "recheck" });
     if (!property) return res.status(404).json({ error: "Recheck property not found" });
-    if (action === "publish") {
-      property.set(prepareSubmittedPropertyPayload(property.toObject(), property));
-      property.status = "approved";
-      property.published = true;
-      property.verified = true;
-      property.publishedAt = new Date();
-    } else {
-      property.status = "pending";
-      property.published = false;
-      property.verified = false;
-    }
-    property.reviewedBy = req.user._id;
-    property.reviewedAt = new Date();
-    await property.save();
-    return res.json({ message: action === "publish" ? "Property published" : "Property moved to Pending", property: presentProperty(property, { includeDocumentUrls: true }) });
+    await applyAdminPropertyWorkflow(property, action, req.user, req.body.note);
+    return res.json({ message: action === "publish" ? "Property published" : "Property moved to Pending", property: presentProperty(property, { includeDocumentUrls: true, includeReviewReadiness: true, includeWorkflowHistory: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Recheck property not found" });
+    if (error instanceof PropertyWorkflowError) return res.status(error.status).json({ error: error.message, readiness: error.readiness });
     if (error instanceof PropertyPayloadError || error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
     console.error("Update recheck property error:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -620,7 +709,7 @@ router.get("/admin/property/:id", auth, adminOnly, async (req, res) => {
       .populate("postedBy", "name phone email role")
       .lean();
     if (!property) return res.status(404).json({ error: "Property not found" });
-    return res.json({ property: presentProperty(property, { includeDocumentUrls: true }) });
+    return res.json({ property: presentProperty(property, { includeDocumentUrls: true, includeReviewReadiness: true, includeWorkflowHistory: true }) });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
     console.error("Get admin property error:", error);
@@ -721,6 +810,7 @@ router.put(
         // Revalidate the complete project at approval time and persist any
         // legacy area labels into the canonical square-foot fields.
         property.set(prepareSubmittedPropertyPayload(property.toObject(), property));
+        assertVerifiedLocationForPublication(property);
         property.status = "published";
         property.verified = true;
         property.published = true;
@@ -753,6 +843,7 @@ router.put("/my/:id/resubmit", auth, propertyOwnerOnly, async (req, res) => {
     }
     const propertyBody = { ...req.body };
     delete propertyBody.submissionProfile;
+    delete propertyBody.locationVerification;
     const normalized = preserveMediaOnImplicitClear(
       propertyBody,
       property,
@@ -984,6 +1075,8 @@ router.post(
         postedDate: new Date().toISOString(),
       });
 
+      if (!savePending && hasTitle) assertVerifiedLocationForPublication(propertyData);
+
       const property = await Property.create(propertyData);
       await linkProperty(property);
 
@@ -1018,14 +1111,17 @@ router.put(
         builderId: existing.builderId,
       };
 
-      const savePending = req.body.status === "pending" || req.body.published === false;
+      const hasExplicitWorkflow = Object.prototype.hasOwnProperty.call(req.body, "status") || Object.prototype.hasOwnProperty.call(req.body, "published");
+      const savePending = req.body.status === "pending" || req.body.published === false
+        || (!hasExplicitWorkflow && ["pending", "recheck", "rejected"].includes(existing.status));
       const normalizedUpdates = preserveMediaOnImplicitClear(
         req.body,
         existing,
-        savePending ? prepareOptionalPropertyPayload(req.body) : prepareSubmittedPropertyPayload(req.body, existing)
+        savePending ? prepareOptionalPropertyPayload(req.body, existing) : prepareSubmittedPropertyPayload(req.body, existing)
       );
       const updates = await convertPropertyMedia(includeAdminWorkflowFields(normalizedUpdates, req.body));
       existing.set(withMediaLedger(updates, existing));
+      if (!savePending) assertVerifiedLocationForPublication(existing);
       const property = await existing.save();
 
       if ("builderId" in req.body) {
@@ -1052,23 +1148,35 @@ router.put(
 // therefore cannot replace or clear project media.
 router.patch("/:id/workflow", auth, adminOnly, async (req, res) => {
   try {
-    const allowed = ["status", "published", "verified", "featured"];
-    const updates = Object.fromEntries(
-      allowed
-        .filter((key) => Object.prototype.hasOwnProperty.call(req.body, key))
-        .map((key) => [key, req.body[key]])
-    );
-    if (!Object.keys(updates).length) return res.status(400).json({ error: "No workflow fields supplied" });
+    const statusActions = { approved: "publish", published: "publish", pending: "move_to_pending", recheck: "move_to_recheck", rejected: "reject" };
+    const requestedAction = String(req.body.action || "").trim();
+    const legacyStatusAction = statusActions[String(req.body.status || "").trim()];
+    const publishedAction = typeof req.body.published === "boolean" ? req.body.published ? "publish" : "move_to_pending" : "";
+    const action = requestedAction || legacyStatusAction || publishedAction;
+    const hasFeatured = typeof req.body.featured === "boolean";
+    if (!action && !hasFeatured) return res.status(400).json({ error: "Choose a workflow action or supply featured" });
+    if (action && !["move_to_recheck", "move_to_pending", "publish", "reject"].includes(action)) {
+      return res.status(400).json({ error: "Invalid property workflow action" });
+    }
     const property = await Property.findById(req.params.id);
     if (!property) return res.status(404).json({ error: "Property not found" });
-    property.set(updates);
-    await property.save();
+    if (hasFeatured) property.featured = req.body.featured;
+    const isSameAdminWorkflowState = property.submittedBy !== "user" && (
+      (action === "publish" && ["approved", "published"].includes(property.status) && property.published !== false)
+      || (action === "move_to_pending" && property.status === "pending" && property.published === false)
+      || (action === "move_to_recheck" && property.status === "recheck" && property.published === false)
+      || (action === "reject" && property.status === "rejected" && property.published === false)
+    );
+    if (action && !isSameAdminWorkflowState) await applyAdminPropertyWorkflow(property, action, req.user, req.body.note);
+    else await property.save();
     return res.json({
       message: "Property workflow updated",
-      property: presentProperty(property, { includeDocumentUrls: true }),
+      property: presentProperty(property, { includeDocumentUrls: true, includeReviewReadiness: true, includeWorkflowHistory: true }),
     });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
+    if (error instanceof PropertyWorkflowError) return res.status(error.status).json({ error: error.message, readiness: error.readiness });
+    if (error instanceof PropertyPayloadError) return res.status(400).json({ error: concisePropertyValidationError(error) });
     if (error.name === "ValidationError") return res.status(400).json({ error: concisePropertyValidationError(error) });
     console.error("Update property workflow error:", error);
     return res.status(500).json({ error: "Internal server error" });
@@ -1158,6 +1266,7 @@ router.post(
     try {
       const propertyBody = { ...req.body };
       delete propertyBody.submissionProfile;
+      delete propertyBody.locationVerification;
       const normalizedBody = prepareSubmittedPropertyPayload(propertyBody);
       const posterProfile = req.isPropertyPoster
         ? await normalizePropertySubmissionProfile(req.body.submissionProfile, req.user)
@@ -1198,6 +1307,7 @@ router.post("/draft", auth, propertyOwnerOnly, async (req, res) => {
   try {
     const propertyBody = { ...req.body };
     delete propertyBody.submissionProfile;
+    delete propertyBody.locationVerification;
     const normalizedBody = prepareOptionalPropertyPayload(propertyBody);
     const posterProfile = req.isPropertyPoster
       ? await normalizePropertySubmissionProfile(req.body.submissionProfile, req.user)

@@ -322,6 +322,49 @@ const nearbyDetailSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const locationAddressComponentsSchema = new mongoose.Schema({
+  road: { type: String, default: "", trim: true },
+  neighbourhood: { type: String, default: "", trim: true },
+  suburb: { type: String, default: "", trim: true },
+  city: { type: String, default: "", trim: true },
+  district: { type: String, default: "", trim: true },
+  state: { type: String, default: "", trim: true },
+  pinCode: { type: String, default: "", trim: true },
+  country: { type: String, default: "", trim: true },
+}, { _id: false });
+
+const locationComparisonSchema = new mongoose.Schema({
+  key: { type: String, required: true, trim: true },
+  label: { type: String, required: true, trim: true },
+  expected: { type: String, default: "", trim: true },
+  actual: { type: String, default: "", trim: true },
+  passed: { type: Boolean, required: true },
+  strong: { type: Boolean, default: false },
+  weight: { type: Number, min: 0, max: 100, default: 0 },
+}, { _id: false });
+
+const locationVerificationSchema = new mongoose.Schema({
+  status: { type: String, enum: ["not_checked", "resolved", "mismatch", "admin_verified"], default: "not_checked" },
+  coordinateSource: { type: String, enum: ["manual", "map_url", "imported"], default: "manual" },
+  inputLatitude: { type: Number, required: true, min: -90, max: 90 },
+  inputLongitude: { type: Number, required: true, min: -180, max: 180 },
+  resolvedLatitude: { type: Number, min: -90, max: 90 },
+  resolvedLongitude: { type: Number, min: -180, max: 180 },
+  resolvedAddress: { type: String, default: "", trim: true, maxlength: 2000 },
+  components: { type: locationAddressComponentsSchema, default: undefined },
+  osmId: { type: String, default: "", trim: true },
+  mapUrl: { type: String, default: "", trim: true },
+  provider: { type: String, enum: ["nominatim"], default: "nominatim" },
+  matchScore: { type: Number, min: 0, max: 100, default: 0 },
+  matches: { type: mongoose.Schema.Types.Mixed, default: undefined },
+  comparisons: { type: [locationComparisonSchema], default: undefined },
+  mismatchFields: [{ type: String, trim: true }],
+  warnings: [{ type: String, trim: true }],
+  analyzedAt: { type: Date, required: true },
+  verifiedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  verifiedAt: { type: Date, default: null },
+}, { _id: false });
+
 const reviewMessageSchema = new mongoose.Schema(
   {
     senderRole: { type: String, enum: ["admin", "user"], required: true },
@@ -331,6 +374,15 @@ const reviewMessageSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+const propertyWorkflowHistorySchema = new mongoose.Schema({
+  fromStatus: { type: String, required: true, trim: true, maxlength: 50 },
+  toStatus: { type: String, required: true, trim: true, maxlength: 50 },
+  action: { type: String, required: true, trim: true, maxlength: 50 },
+  note: { type: String, default: "", trim: true, maxlength: 1000 },
+  actor: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
+  at: { type: Date, default: Date.now },
+}, { _id: false });
 
 const reraDocumentSchema = new mongoose.Schema({
   key: { type: String, required: true, trim: true },
@@ -400,7 +452,7 @@ const propertySchema = new mongoose.Schema(
     possessionDetails: { type: possessionDetailsSchema, default: undefined },
     builder: { type: String, default: "" },
     developerLogoUrl: { type: String, default: "", trim: true },
-    developerDescription: { type: String, default: "", trim: true, maxlength: 3000 },
+    developerDescription: { type: String, default: "", trim: true, maxlength: 5000 },
     localityMapImageUrl: { type: String, default: "", trim: true },
     image: { type: String, default: "" },
     badges: [{ type: String }],
@@ -438,6 +490,9 @@ const propertySchema = new mongoose.Schema(
       packageName: { type: String, trim: true, maxlength: 300 },
       packageSize: { type: Number, min: 0 },
       batchName: { type: String, trim: true, maxlength: 300 },
+      batchKey: { type: String, trim: true, maxlength: 300 },
+      importState: { type: String, enum: ["uploading", "complete", "failed"], default: "complete" },
+      importError: { type: String, trim: true, maxlength: 2000 },
       importedAt: { type: Date },
     },
     ageOfProperty: { type: String, default: "" },
@@ -478,6 +533,7 @@ const propertySchema = new mongoose.Schema(
       latitude: { type: Number, min: -90, max: 90 },
       longitude: { type: Number, min: -180, max: 180 },
     },
+    locationVerification: { type: locationVerificationSchema, default: undefined },
 
     nearbyAmenities: {
       schools: { type: String, default: "" },
@@ -512,6 +568,7 @@ const propertySchema = new mongoose.Schema(
       default: "approved",
     },
     reviewMessages: { type: [reviewMessageSchema], default: [] },
+    workflowHistory: { type: [propertyWorkflowHistorySchema], default: [] },
     submissionVersion: { type: Number, min: 1, default: 1 },
     lastSubmittedAt: { type: Date, default: null },
     reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
