@@ -241,6 +241,12 @@ describe("Property status workflow", () => {
     expect(response.status).toBe(200);
     expect(response.body.property.reraPhases[0].reraDocuments[0].key).toBe("rera-registration-certificate-5");
     expect(response.body.property.reraPhases[0].projectDocuments[0].key).toBe("portal-project-plan-6");
+    expect(typeof response.body.property._id).toBe("string");
+    expect(typeof response.body.property.reraPhases[0]._id).toBe("string");
+    expect(typeof response.body.property.reraPhases[0].reraDocuments[0]._id).toBe("string");
+    expect(typeof response.body.property.reraPhases[0].projectDocuments[0]._id).toBe("string");
+    expect(typeof response.body.property.reviewedBy).toBe("string");
+    expect(typeof response.body.property.workflowHistory[0].actor).toBe("string");
   });
 
   it("lets an admin publish reviewed imports with half-BHK labels and unavailable optional configuration facts", async () => {

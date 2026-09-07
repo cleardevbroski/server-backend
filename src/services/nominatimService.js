@@ -115,6 +115,36 @@ async function resolveNearbyPlace({ query, latitude, longitude }) {
   return rememberResult(cacheKey, "nearby-search", result);
 }
 
+async function searchLocation(query) {
+  const normalized = String(query || "").trim();
+  if (!normalized) return null;
+  const cacheKey = `public-search|${normalized.toLowerCase()}`;
+  const cached = await cachedResult(cacheKey);
+  if (cached) return cached;
+  const searchUrl = serviceUrl("/search");
+  searchUrl.searchParams.set("q", normalized);
+  searchUrl.searchParams.set("format", "jsonv2");
+  searchUrl.searchParams.set("addressdetails", "1");
+  searchUrl.searchParams.set("limit", "1");
+  searchUrl.searchParams.set("countrycodes", "in");
+  const response = await queuedFetch(searchUrl, {
+    headers: { Accept: "application/json", "Accept-Language": "en", "User-Agent": "ClearTitleOne/1.0 (buyer-destination-resolver)" },
+    signal: AbortSignal.timeout(12000),
+  });
+  if (!response.ok) throw new Error(`OpenStreetMap geocoding returned ${response.status}`);
+  const rows = await response.json();
+  const candidate = Array.isArray(rows) ? rows[0] : null;
+  const latitude = Number(candidate?.lat);
+  const longitude = Number(candidate?.lon);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return rememberResult(cacheKey, "public-search", {
+    latitude,
+    longitude,
+    resolvedAddress: String(candidate.display_name || normalized).trim(),
+    provider: "nominatim",
+  });
+}
+
 async function reverseProjectLocation({ latitude, longitude }) {
   const cacheKey = `project-reverse|${latitude.toFixed(6)}|${longitude.toFixed(6)}`;
   const cached = await cachedResult(cacheKey);
@@ -167,4 +197,4 @@ async function reverseProjectLocation({ latitude, longitude }) {
   return rememberResult(cacheKey, "project-reverse", result);
 }
 
-module.exports = { resolveNearbyPlace, reverseProjectLocation, distanceMeters };
+module.exports = { resolveNearbyPlace, reverseProjectLocation, searchLocation, distanceMeters };

@@ -123,4 +123,68 @@ describe("Leads API", () => {
     expect(res.status).toBe(200);
     expect(res.body.lead.status).toBe("contacted");
   });
+
+  it("searches lead identity and property fields with pagination metadata", async () => {
+    const { token } = await createAdminToken();
+    await Lead.create({ type: "property_interest", name: "Meera Rao", phone: "9876543210", propertyTitle: "Sobha Galera" });
+    await Lead.create({ type: "contact", name: "Arun", email: "arun@example.com" });
+
+    const res = await request(app)
+      .get("/api/leads?search=Galera&page=1&limit=10")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.leads).toHaveLength(1);
+    expect(res.body.leads[0]).toMatchObject({ name: "Meera Rao", propertyTitle: "Sobha Galera" });
+    expect(res.body.pagination).toMatchObject({ page: 1, limit: 10, total: 1, pages: 1 });
+  });
+
+  it("returns lead dashboard metrics including qualified leads", async () => {
+    const { token } = await createAdminToken();
+    await Lead.create({ type: "contact", name: "New customer", status: "new" });
+    await Lead.create({ type: "contact", name: "Reviewed customer", status: "contacted" });
+    await Lead.create({ type: "property_interest", name: "Qualified customer", status: "qualified" });
+
+    const res = await request(app).get("/api/leads/metrics").set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 3, new: 1, contacted: 1, qualified: 1, needsAttention: 1 });
+  });
+
+  it("saves admin qualification and internal follow-up history", async () => {
+    const { token } = await createAdminToken();
+    const lead = await Lead.create({ type: "property_interest", name: "Asha", propertyTitle: "Lakeview Heights" });
+
+    const qualification = await request(app)
+      .patch(`/api/leads/${lead._id}/qualification`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ score: 72, level: "high", reasons: ["Viewed the same project repeatedly"] });
+    expect(qualification.status).toBe(200);
+    expect(qualification.body.lead).toMatchObject({ qualificationScore: 72, qualificationLevel: "high" });
+
+    const note = await request(app)
+      .patch(`/api/leads/${lead._id}/follow-up`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ note: "Interested in a weekend site visit.", assignedTo: "Sales desk" });
+    expect(note.status).toBe(200);
+    expect(note.body.lead.followUpHistory).toHaveLength(1);
+    expect(note.body.lead).toMatchObject({ followUpNote: "Interested in a weekend site visit.", assignedTo: "Sales desk" });
+  });
+
+  it("imports compact spreadsheet rows and rejects duplicate identities", async () => {
+    const { token } = await createAdminToken();
+    await Lead.create({ type: "contact", name: "Existing", phone: "9876543210" });
+
+    const res = await request(app)
+      .post("/api/leads/import")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ rows: [
+        { name: "Duplicate", phone: "+91 98765 43210" },
+        { name: "New buyer", phone: "9876501234", propertyTitle: "ClearTitle Heights", budget: "₹1 Cr" },
+      ] });
+
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ imported: 1, rejected: 1 });
+    expect(await Lead.countDocuments({ source: "admin_import" })).toBe(1);
+  });
 });

@@ -1,10 +1,10 @@
 services:
   - type: web
     name: clear-title-backend
-    runtime: node
+    runtime: docker
     plan: starter
-    buildCommand: npm install
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
     envVars:
       - key: MONGODB_URI
         sync: false
@@ -26,6 +26,8 @@ services:
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
+      - key: DOCUMENT_OCR_MAX_PAGES
+        value: 80
       - key: CHANNEL_PARTNER_ENCRYPTION_KEY
         sync: false
       - key: CHANNEL_PARTNER_LOOKUP_KEY

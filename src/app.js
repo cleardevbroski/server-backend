@@ -105,6 +105,10 @@ app.use("/api/channel-partner-leads", require("./routes/channelPartnerLeads"));
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/client-activity", require("./routes/clientActivity"));
 app.use("/api/favorites", require("./routes/favorites"));
+app.use("/api/affordability", require("./routes/affordability"));
+app.use("/api/home-finder", require("./routes/homeFinder"));
+app.use("/api/decision-workspaces", require("./routes/decisionWorkspaces"));
+app.use("/api/project-assistant", require("./routes/projectAssistant"));
 app.use("/api/system-notifications", require("./routes/systemNotifications"));
 app.use("/api/search", searchRoutes);
 

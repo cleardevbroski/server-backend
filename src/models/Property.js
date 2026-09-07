@@ -417,6 +417,19 @@ const reraPhaseSchema = new mongoose.Schema({
   projectDocuments: { type: [reraDocumentSchema], default: [] },
 });
 
+const acquisitionChargeSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true, maxlength: 120 },
+  code: { type: String, default: "other", trim: true, lowercase: true, maxlength: 80 },
+  calculationType: { type: String, enum: ["fixed", "percentage", "per_sqft", "included", "not_applicable"], default: "fixed" },
+  value: { type: Number, min: 0, default: 0 },
+  basis: { type: String, enum: ["base_price", "agreement_value", "built_up_area"], default: "base_price" },
+  appliesToConfiguration: { type: String, default: "", trim: true, maxlength: 150 },
+  paymentTiming: { type: String, enum: ["initial", "monthly", "at_registration", "other"], default: "initial" },
+  sourceType: { type: String, enum: ["exact_project_value", "developer_supplied"], default: "developer_supplied" },
+  sourceNote: { type: String, default: "", trim: true, maxlength: 500 },
+  optional: { type: Boolean, default: false },
+}, { _id: false });
+
 const propertySchema = new mongoose.Schema(
   {
     title: { type: String, trim: true },
@@ -424,6 +437,9 @@ const propertySchema = new mongoose.Schema(
     price: { type: String },
     pricePerSqft: { type: String, default: "" },
     priceValue: { type: Number, default: 0 }, // numeric price for range filtering/sorting in /api/search
+    priceUpdatedAt: { type: Date, default: null },
+    priceSourceType: { type: String, enum: ["exact_project_value", "developer_supplied"], default: "developer_supplied" },
+    acquisitionCharges: { type: [acquisitionChargeSchema], default: [] },
     configs: [{ type: String }],
     configurationDetails: { type: [configurationDetailSchema], default: undefined },
     villaDetails: { type: villaDetailsSchema, default: undefined },

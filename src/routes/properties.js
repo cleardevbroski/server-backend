@@ -143,6 +143,24 @@ function presentSubmissionProfile(profile) {
   };
 }
 
+function isMongoObjectId(value) {
+  return Boolean(
+    value
+      && typeof value === "object"
+      && value._bsontype === "ObjectId"
+      && typeof value.toHexString === "function"
+  );
+}
+
+function stringifyMongoIds(value) {
+  if (isMongoObjectId(value)) return value.toHexString();
+  if (Array.isArray(value)) return value.map(stringifyMongoIds);
+  if (!value || typeof value !== "object" || value instanceof Date || Buffer.isBuffer(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, stringifyMongoIds(item)])
+  );
+}
+
 function presentProperty(property, { includeDocumentUrls = false, includeSubmissionProfile = false, includeReviewReadiness = false, includeWorkflowHistory = false } = {}) {
   const source = typeof property.toObject === "function" ? property.toObject() : property;
   const { heroVideo, videos, virtualTourUrl, mediaAssets, submissionProfile, propertyPoster, workflowHistory, ...visibleProperty } = source;
@@ -156,13 +174,13 @@ function presentProperty(property, { includeDocumentUrls = false, includeSubmiss
   if (!includeDocumentUrls && Array.isArray(visibleProperty.projectDownloads)) {
     visibleProperty.projectDownloads = visibleProperty.projectDownloads.map(({ fileUrl, ...document }) => document);
   }
-  return {
+  return stringifyMongoIds({
     ...visibleProperty,
     ...(includeSubmissionProfile ? { submissionProfile: presentSubmissionProfile(submissionProfile), propertyPoster } : {}),
     ...(includeReviewReadiness ? { reviewReadiness: buildPropertyReviewReadiness(source) } : {}),
     ...(includeWorkflowHistory ? { workflowHistory: workflowHistory || [] } : {}),
     id: source._id.toString(),
-  };
+  });
 }
 
 const ownerFilter = (req) => req.isPropertyPoster
@@ -213,6 +231,11 @@ function preserveMediaOnImplicitClear(body, existing, updates) {
 
 function compactPropertyPayload(value) {
   if (value === undefined || value === null) return undefined;
+  // Workflow publication revalidates an existing Mongoose document. Preserve
+  // BSON ids as castable strings instead of recursively expanding their
+  // internal `buffer`, which Mongoose cannot cast back to ObjectId.
+  if (isMongoObjectId(value)) return value.toHexString();
+  if (value instanceof Date || Buffer.isBuffer(value)) return value;
   if (typeof value === "string") return value.trim() || undefined;
   if (Array.isArray(value)) {
     const entries = value.map(compactPropertyPayload).filter((item) => item !== undefined);
@@ -243,8 +266,48 @@ function parseArea(value) {
 }
 
 function localityName(property) {
-  const value = property.locality?.landmark || property.locality?.address || property.subtitle || "";
+  const components = property.locationVerification?.status === "admin_verified"
+    ? property.locationVerification.components || {}
+    : {};
+  const value = components.neighbourhood
+    || components.suburb
+    || property.locality?.landmark
+    || property.locality?.address
+    || property.subtitle
+    || "";
   return String(value).split(",")[0].trim();
+}
+
+function cityKey(property) {
+  const verifiedCity = property.locationVerification?.status === "admin_verified"
+    ? property.locationVerification.components?.city
+    : "";
+  const raw = verifiedCity || property.locality?.city || "";
+  const normalized = String(raw).trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  if (["bangalore", "bengaluru", "bangalore urban", "bengaluru urban"].includes(normalized)) return "bengaluru";
+  return normalized;
+}
+
+function verifiedProjectCoordinates(property) {
+  if (property.locationVerification?.status !== "admin_verified") return null;
+  const latitude = Number(property.locationVerification.resolvedLatitude ?? property.locationVerification.inputLatitude);
+  const longitude = Number(property.locationVerification.resolvedLongitude ?? property.locationVerification.inputLongitude);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) return null;
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) return null;
+  return { latitude, longitude };
+}
+
+function distanceInKm(from, to) {
+  const radians = (degrees) => degrees * (Math.PI / 180);
+  const earthRadiusKm = 6371;
+  const latitudeDelta = radians(to.latitude - from.latitude);
+  const longitudeDelta = radians(to.longitude - from.longitude);
+  const fromLatitude = radians(from.latitude);
+  const toLatitude = radians(to.latitude);
+  const haversine = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(fromLatitude) * Math.cos(toLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+  const bounded = Math.min(1, Math.max(0, haversine));
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(bounded), Math.sqrt(1 - bounded));
 }
 
 function propertyPricePerSqft(property) {
@@ -990,17 +1053,21 @@ router.get("/price-comparison/:id", async (req, res) => {
     if (!targetLocation) return res.json({ currentLocation: "", comparisons: [] });
     const filter = { propertyType: target.propertyType, ...visible };
     if (target.listingType) filter.listingType = target.listingType;
-    if (target.locality?.city) filter["locality.city"] = target.locality.city;
+    const targetCity = cityKey(target);
     const projects = await Property.find(filter)
-      .select("propertyType listingType price pricePerSqft area subtitle locality configurationDetails villaDetails plotDetails commercialDetails pgDetails")
+      .select("propertyType listingType price pricePerSqft area subtitle locality locationVerification configurationDetails villaDetails plotDetails commercialDetails pgDetails")
       .lean();
     const groups = new Map();
     projects.forEach((project) => {
+      const projectCity = cityKey(project);
+      if (targetCity && projectCity && targetCity !== projectCity) return;
       const location = localityName(project);
       const pricePerSqft = propertyPricePerSqft(project);
       if (!location || !Number.isFinite(pricePerSqft) || pricePerSqft <= 0) return;
-      const group = groups.get(location.toLowerCase()) || { location, values: [] };
+      const group = groups.get(location.toLowerCase()) || { location, values: [], coordinates: [] };
       group.values.push(pricePerSqft);
+      const coordinates = verifiedProjectCoordinates(project);
+      if (coordinates) group.coordinates.push(coordinates);
       groups.set(location.toLowerCase(), group);
     });
     const currentKey = targetLocation.toLowerCase();
@@ -1009,12 +1076,34 @@ router.get("/price-comparison/:id", async (req, res) => {
       location: group.location,
       averagePricePerSqft: Math.round(group.values.reduce((sum, value) => sum + value, 0) / group.values.length),
       projectCount: group.values.length,
+      coordinates: group.coordinates.length ? {
+        latitude: group.coordinates.reduce((sum, item) => sum + item.latitude, 0) / group.coordinates.length,
+        longitude: group.coordinates.reduce((sum, item) => sum + item.longitude, 0) / group.coordinates.length,
+      } : null,
     }));
     const current = comparisons.find((item) => item.key === currentKey);
-    const closest = comparisons.filter((item) => item.key !== currentKey)
-      .sort((a, b) => Math.abs(a.averagePricePerSqft - (current?.averagePricePerSqft || 0)) - Math.abs(b.averagePricePerSqft - (current?.averagePricePerSqft || 0)))
-      .slice(0, 4);
-    return res.json({ comparisonMetric: target.propertyType === "PG/Co-living" ? "monthlyRentPerBed" : "pricePerSqft", currentLocation: targetLocation, comparisons: current ? [current, ...closest] : closest });
+    const targetCoordinates = verifiedProjectCoordinates(target);
+    const closest = targetCoordinates ? comparisons.filter((item) => item.key !== currentKey && item.coordinates)
+      .map((item) => ({ ...item, distanceKm: Number(distanceInKm(targetCoordinates, item.coordinates).toFixed(1)) }))
+      .sort((a, b) => a.distanceKm - b.distanceKm || b.projectCount - a.projectCount)
+      .slice(0, 4)
+      : [];
+    const publicComparison = (item, distanceKm) => ({
+      key: item.key,
+      location: item.location,
+      averagePricePerSqft: item.averagePricePerSqft,
+      projectCount: item.projectCount,
+      ...(Number.isFinite(distanceKm) ? { distanceKm } : {}),
+    });
+    return res.json({
+      comparisonMetric: target.propertyType === "PG/Co-living" ? "monthlyRentPerBed" : "pricePerSqft",
+      comparisonBasis: current && closest.length ? "verified_nearby_localities" : "nearby_data_unavailable",
+      currentLocation: targetLocation,
+      comparisons: current ? [
+        publicComparison(current, 0),
+        ...closest.map((item) => publicComparison(item, item.distanceKm)),
+      ] : [],
+    });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Property not found" });
     console.error("Property price comparison error:", error);
