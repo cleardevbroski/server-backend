@@ -5,6 +5,8 @@ const VERIFICATION_STATUSES = [
   "wrong_number", "not_channel_partner", "duplicate", "do_not_contact", "other",
 ];
 const PROPERTY_TYPES = ["apartments", "villas", "plots", "commercial", "rentals", "other"];
+const BROKER_CALL_OUTCOMES = ["", "answered", "callback_requested", "no_answer", "busy", "wrong_number"];
+const BROKER_PROJECT_INTERESTS = ["", "interested", "not_interested"];
 
 const cpProspectSchema = new mongoose.Schema({
   prospectType: { type: String, enum: ["channel_partner", "broker"], default: "channel_partner", index: true },
@@ -20,7 +22,14 @@ const cpProspectSchema = new mongoose.Schema({
   lastContactedAt: { type: Date, default: null },
   nextFollowUpAt: { type: Date, default: null, index: true },
   callAttempts: { type: Number, default: 0, min: 0 },
+  whatsappOpened: { type: Number, default: 0, min: 0 },
+  whatsappSent: { type: Number, default: 0, min: 0 },
   profileCompletion: { type: Number, default: 0, min: 0, max: 100, index: true },
+  broker: {
+    lastCallOutcome: { type: String, enum: BROKER_CALL_OUTCOMES, default: "", index: true },
+    projectInterest: { type: String, enum: BROKER_PROJECT_INTERESTS, default: "", index: true },
+    followUpAgenda: { type: String, default: "", trim: true, maxlength: 2000 },
+  },
   partnerType: { type: String, enum: ["", "company", "individual"], default: "" },
   company: {
     name: { type: String, default: "", trim: true, maxlength: 160 },
@@ -70,11 +79,14 @@ const cpProspectSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 cpProspectSchema.index({ assignedEmployeeId: 1, verificationStatus: 1, nextFollowUpAt: 1 });
-cpProspectSchema.index({ "address.city": 1, "business.areasOfOperation": 1, "business.preferredSegments": 1 });
+cpProspectSchema.index({ "business.areasOfOperation": 1 });
+cpProspectSchema.index({ "business.preferredSegments": 1 });
 cpProspectSchema.index({ importBatchId: 1, sourceRowNumber: 1 }, { unique: true });
 
 const CPProspect = mongoose.model("CPProspect", cpProspectSchema);
 CPProspect.VERIFICATION_STATUSES = VERIFICATION_STATUSES;
 CPProspect.PROPERTY_TYPES = PROPERTY_TYPES;
+CPProspect.BROKER_CALL_OUTCOMES = BROKER_CALL_OUTCOMES;
+CPProspect.BROKER_PROJECT_INTERESTS = BROKER_PROJECT_INTERESTS;
 
 module.exports = CPProspect;

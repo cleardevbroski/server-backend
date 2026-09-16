@@ -10,6 +10,7 @@ const attachmentSchema = new mongoose.Schema({
 const cpCrmMessageTemplateSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true, maxlength: 120 },
   kind: { type: String, enum: ["project", "follow_up"], required: true, index: true },
+  audience: { type: String, enum: ["all", "registered_cp", "imported_cp", "broker"], default: "all", index: true },
   projectName: { type: String, default: "", trim: true, maxlength: 180 },
   body: { type: String, required: true, trim: true, maxlength: 5000 },
   attachments: { type: [attachmentSchema], default: [] },
@@ -17,6 +18,6 @@ const cpCrmMessageTemplateSchema = new mongoose.Schema({
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 }, { timestamps: true });
 
-cpCrmMessageTemplateSchema.index({ kind: 1, isActive: 1, createdAt: -1 });
+cpCrmMessageTemplateSchema.index({ audience: 1, kind: 1, isActive: 1, createdAt: -1 });
 
 module.exports = mongoose.model("CPCRMMessageTemplate", cpCrmMessageTemplateSchema);

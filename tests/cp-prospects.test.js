@@ -2,6 +2,7 @@ const request = require("supertest");
 const app = require("../src/app");
 const CPProspect = require("../src/models/CPProspect");
 const CPProspectFollowUp = require("../src/models/CPProspectFollowUp");
+const CPProspectInteraction = require("../src/models/CPProspectInteraction");
 const { createAdminToken } = require("./helpers");
 
 async function createEmployee(adminToken, employeeId = "VERIFY-001") {
@@ -137,5 +138,80 @@ describe("Imported CP verification", () => {
     expect(brokers.body.metrics.total).toBe(1);
     expect(channelPartners.body.prospects).toHaveLength(0);
     expect(channelPartners.body.metrics.total).toBe(0);
+
+    const brokerId = brokers.body.prospects[0].id;
+    const template = await request(app).post("/api/cp-crm/admin/templates").set("Authorization", `Bearer ${adminToken}`).send({
+      name: "Broker project", kind: "project", audience: "broker", projectName: "ClearTitle Heights", body: "Hello {{broker_name}}, project details",
+    });
+    expect(template.status).toBe(201);
+    expect(template.body.template.audience).toBe("broker");
+    const detail = await request(app).get(`/api/cp-prospects/mine/prospects/${brokerId}`).set("Authorization", `Bearer ${staffToken}`);
+    expect(detail.body.templates.map((item) => item.id)).toContain(template.body.template.id);
+
+    const missingFollowUp = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/broker-result`).set("Authorization", `Bearer ${staffToken}`).send({
+      outcome: "answered", projectInterest: "interested",
+    });
+    expect(missingFollowUp.status).toBe(400);
+    const callbackAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const interested = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/broker-result`).set("Authorization", `Bearer ${staffToken}`).send({
+      outcome: "answered", projectInterest: "interested", callbackAt, followUpAgenda: "Discuss project pricing", note: "Asked for the brochure",
+    });
+    expect(interested.status).toBe(201);
+    let storedBroker = await CPProspect.findById(brokerId).lean();
+    expect(storedBroker).toMatchObject({ verificationStatus: "active", broker: { lastCallOutcome: "answered", projectInterest: "interested", followUpAgenda: "Discuss project pricing" } });
+    expect(await CPProspectFollowUp.countDocuments({ prospectId: brokerId, status: "pending" })).toBe(1);
+
+    const whatsapp = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-open`).set("Authorization", `Bearer ${staffToken}`).send({
+      templateId: template.body.template.id, messageBody: "Hello Shared Contact, project details",
+    });
+    expect(whatsapp.status).toBe(201);
+    expect(whatsapp.body.whatsappUrl).toContain("https://wa.me/919876543288?text=");
+    const whatsappResult = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-result`).set("Authorization", `Bearer ${staffToken}`).send({
+      outcome: "sent", interactionId: whatsapp.body.interactionId,
+    });
+    expect(whatsappResult.status).toBe(201);
+
+    const notInterested = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/broker-result`).set("Authorization", `Bearer ${staffToken}`).send({
+      outcome: "answered", projectInterest: "not_interested", areasOfOperation: ["Whitefield", "Varthur"], preferredSegments: ["apartments", "plots"], note: "Works in resale only",
+    });
+    expect(notInterested.status).toBe(201);
+    storedBroker = await CPProspect.findById(brokerId).lean();
+    expect(storedBroker).toMatchObject({ verificationStatus: "inactive", whatsappOpened: 1, whatsappSent: 1, broker: { projectInterest: "not_interested" } });
+    expect(storedBroker.business.areasOfOperation).toEqual(["Whitefield", "Varthur"]);
+    expect(storedBroker.business.preferredSegments).toEqual(["apartments", "plots"]);
+    expect(await CPProspectInteraction.countDocuments({ prospectId: brokerId, action: "broker_call_result" })).toBe(2);
+  }, 60000);
+
+  it("allocates an inclusive contact range from a selected import batch", async () => {
+    const { token: adminToken } = await createAdminToken();
+    const { employee, token: staffToken } = await createEmployee(adminToken, "RANGE-001");
+    const batch = await request(app).post("/api/cp-prospects/admin/imports").set("Authorization", `Bearer ${adminToken}`).send({
+      prospectType: "broker", name: "Range allocation", originalFileName: "range.csv", totalRows: 5,
+    });
+    const batchId = batch.body.batch.id;
+    await request(app).post(`/api/cp-prospects/admin/imports/${batchId}/rows`).set("Authorization", `Bearer ${adminToken}`).send({
+      startRow: 2,
+      rows: Array.from({ length: 5 }, (_, index) => ({ contactName: `Broker ${index + 1}`, mobile: `987654320${index}` })),
+    });
+
+    const allocation = await request(app).patch("/api/cp-prospects/admin/prospects/allocate").set("Authorization", `Bearer ${adminToken}`).send({
+      employeeId: employee.id,
+      rangeFrom: 2,
+      rangeTo: 4,
+      filters: { prospectType: "broker", batchId },
+    });
+    expect(allocation.status).toBe(200);
+    expect(allocation.body).toMatchObject({ assignedCount: 3, selectedCount: 3, skippedAssignedCount: 0, rangeFrom: 2, rangeTo: 4 });
+
+    const queue = await request(app).get("/api/cp-prospects/mine/prospects?prospectType=broker").set("Authorization", `Bearer ${staffToken}`);
+    expect(queue.body.prospects.map((prospect) => prospect.sourceRowNumber)).toEqual([3, 4, 5]);
+
+    const repeated = await request(app).patch("/api/cp-prospects/admin/prospects/allocate").set("Authorization", `Bearer ${adminToken}`).send({
+      employeeId: employee.id,
+      rangeFrom: 2,
+      rangeTo: 4,
+      filters: { prospectType: "broker", batchId },
+    });
+    expect(repeated.status).toBe(409);
   }, 60000);
 });

@@ -8,6 +8,7 @@ const CPProspect = require("../models/CPProspect");
 const CPProspectImportBatch = require("../models/CPProspectImportBatch");
 const CPProspectInteraction = require("../models/CPProspectInteraction");
 const CPProspectFollowUp = require("../models/CPProspectFollowUp");
+const CPCRMMessageTemplate = require("../models/CPCRMMessageTemplate");
 const { encryptSensitive, hashLookup } = require("../utils/channelPartnerCrypto");
 
 const router = express.Router();
@@ -21,11 +22,21 @@ const ACCOUNT = /^[0-9]{6,20}$/;
 const PROPERTY_TYPES = new Set(CPProspect.PROPERTY_TYPES);
 const STATUSES = new Set(CPProspect.VERIFICATION_STATUSES);
 const PROSPECT_TYPES = new Set(["channel_partner", "broker"]);
+const BROKER_CALL_OUTCOMES = new Set(CPProspect.BROKER_CALL_OUTCOMES.filter(Boolean));
+const BROKER_PROJECT_INTERESTS = new Set(CPProspect.BROKER_PROJECT_INTERESTS.filter(Boolean));
+const WHATSAPP_OUTCOMES = new Set(["sent", "not_sent"]);
 
 function normalizePhone(value) {
   let valueDigits = digits(value);
   if (valueDigits.length === 12 && valueDigits.startsWith("91")) valueDigits = valueDigits.slice(2);
   if (valueDigits.length === 11 && valueDigits.startsWith("0")) valueDigits = valueDigits.slice(1);
+  return valueDigits;
+}
+
+function internationalPhone(value) {
+  let valueDigits = digits(value);
+  if (valueDigits.length === 11 && valueDigits.startsWith("0")) valueDigits = valueDigits.slice(1);
+  if (valueDigits.length === 10) valueDigits = `91${valueDigits}`;
   return valueDigits;
 }
 
@@ -101,7 +112,13 @@ function presentProspect(prospect) {
     assignedEmployee: employee, assignedAt: prospect.assignedAt,
     verificationStatus: prospect.verificationStatus, verifiedAt: prospect.verifiedAt,
     lastContactedAt: prospect.lastContactedAt, nextFollowUpAt: prospect.nextFollowUpAt,
-    callAttempts: prospect.callAttempts || 0, profileCompletion: prospect.profileCompletion || 0,
+    callAttempts: prospect.callAttempts || 0, whatsappOpened: prospect.whatsappOpened || 0,
+    whatsappSent: prospect.whatsappSent || 0, profileCompletion: prospect.profileCompletion || 0,
+    broker: {
+      lastCallOutcome: prospect.broker?.lastCallOutcome || "",
+      projectInterest: prospect.broker?.projectInterest || "",
+      followUpAgenda: prospect.broker?.followUpAgenda || "",
+    },
     partnerType: prospect.partnerType || "",
     company: {
       name: prospect.company?.name || "", businessType: prospect.company?.businessType || "",
@@ -204,7 +221,7 @@ async function prospectMetrics(filter = {}) {
   const employeeFilter = filter.assignedEmployeeId;
   const hasSpecificEmployee = Boolean(employeeFilter) && !(typeof employeeFilter === "object" && Object.keys(employeeFilter).some((key) => key.startsWith("$")));
   const assignedFilter = hasSpecificEmployee ? filter : { ...filter, assignedEmployeeId: { $ne: null } };
-  const [total, assigned, pending, active, inactive, callback, unreachable, completed, overdue] = await Promise.all([
+  const [total, assigned, pending, active, inactive, callback, unreachable, completed, overdue, interested, notInterested, whatsappOpened, whatsappSent] = await Promise.all([
     CPProspect.countDocuments(filter),
     CPProspect.countDocuments(assignedFilter),
     CPProspect.countDocuments({ ...filter, verificationStatus: "pending" }),
@@ -214,17 +231,26 @@ async function prospectMetrics(filter = {}) {
     CPProspect.countDocuments({ ...filter, verificationStatus: { $in: ["no_answer", "busy"] } }),
     CPProspect.countDocuments({ ...filter, verificationStatus: { $nin: ["pending", "callback_requested"] } }),
     CPProspect.countDocuments({ ...filter, nextFollowUpAt: { $lt: now }, verificationStatus: "callback_requested" }),
+    CPProspect.countDocuments({ ...filter, "broker.projectInterest": "interested" }),
+    CPProspect.countDocuments({ ...filter, "broker.projectInterest": "not_interested" }),
+    CPProspect.countDocuments({ ...filter, whatsappOpened: { $gt: 0 } }),
+    CPProspect.countDocuments({ ...filter, whatsappSent: { $gt: 0 } }),
   ]);
-  return { total, assigned, unassigned: total - assigned, pending, active, inactive, callback, unreachable, completed, overdue };
+  return { total, assigned, unassigned: total - assigned, pending, active, inactive, callback, unreachable, completed, overdue, interested, notInterested, whatsappOpened, whatsappSent };
 }
 
 async function prospectDetail(prospect) {
-  const [interactions, followUps] = await Promise.all([
+  const audience = prospect.prospectType === "broker" ? "broker" : "imported_cp";
+  const [interactions, followUps, templates] = await Promise.all([
     CPProspectInteraction.find({ prospectId: prospect._id }).sort({ createdAt: -1 }).limit(100).populate("employeeId", "employeeId name").lean(),
     CPProspectFollowUp.find({ prospectId: prospect._id }).sort({ scheduledAt: -1 }).limit(50).populate("employeeId", "employeeId name").lean(),
+    CPCRMMessageTemplate.find({ isActive: true, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] }).sort({ kind: 1, createdAt: -1 }).lean(),
   ]);
   const presentActivity = (item) => ({ ...item, id: String(item._id), employee: item.employeeId ? publicEmployee(item.employeeId) : null });
-  return { prospect: presentProspect(prospect), interactions: interactions.map(presentActivity), followUps: followUps.map(presentActivity) };
+  return {
+    prospect: presentProspect(prospect), interactions: interactions.map(presentActivity), followUps: followUps.map(presentActivity),
+    templates: templates.map((item) => ({ ...item, id: String(item._id) })),
+  };
 }
 
 async function ownedProspect(req, res) {
@@ -291,6 +317,7 @@ router.post("/admin/imports/:id/rows", auth, adminOnly, async (req, res) => {
       insertRows.push(prospectFromRow(item.row, batch._id, item.sourceRowNumber, existingPartnerId, batch.prospectType));
     }
     let imported = 0;
+    const databaseErrors = [];
     if (insertRows.length) {
       try {
         const inserted = await CPProspect.insertMany(insertRows, { ordered: false });
@@ -298,18 +325,35 @@ router.post("/admin/imports/:id/rows", auth, adminOnly, async (req, res) => {
       } catch (error) {
         if (error?.writeErrors) {
           imported = error.insertedDocs?.length || error.result?.insertedCount || 0;
-          duplicates += insertRows.length - imported;
+          for (const writeError of error.writeErrors) {
+            if (writeError.code === 11000) {
+              duplicates += 1;
+              continue;
+            }
+            const failedRow = insertRows[writeError.index];
+            databaseErrors.push({
+              rowNumber: failedRow?.sourceRowNumber || startRow,
+              message: "The database rejected this row. Please verify its imported values.",
+            });
+          }
         } else throw error;
       }
     }
     batch.processedRows += rows.length;
     batch.importedCount += imported;
     batch.duplicateCount += duplicates;
-    batch.invalidCount += errors.length;
+    batch.invalidCount += errors.length + databaseErrors.length;
     batch.matchedRegisteredCount += matchedRegistered;
-    batch.errorSamples = [...batch.errorSamples, ...errors].slice(0, 100);
+    batch.errorSamples = [...batch.errorSamples, ...errors, ...databaseErrors].slice(0, 100);
     await batch.save();
-    return res.json({ processed: rows.length, imported, duplicates, invalid: errors.length, matchedRegistered, errorSamples: errors.slice(0, 20) });
+    return res.json({
+      processed: rows.length,
+      imported,
+      duplicates,
+      invalid: errors.length + databaseErrors.length,
+      matchedRegistered,
+      errorSamples: [...errors, ...databaseErrors].slice(0, 20),
+    });
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Import batch not found." });
     console.error("Import CP prospect rows error:", error);
@@ -378,11 +422,11 @@ router.get("/admin/prospects", auth, adminOnly, async (req, res) => {
 router.get("/admin/prospects/export", auth, adminOnly, async (req, res) => {
   try {
     const prospects = await populateProspects(CPProspect.find(prospectFilter(req.query)).sort({ createdAt: 1 }).limit(50000));
-    const header = ["Company", "Contact", "Mobile", "Email", "Status", "City", "State", "Areas", "Property Types", "Employee", "Completion", "PAN", "Account", "Next Follow-up"];
+    const header = ["Company", "Contact", "Mobile", "Email", "Status", "Broker Call Result", "Project Interest", "Follow-up Agenda", "City", "State", "Areas", "Property Types", "Employee", "Completion", "WhatsApp Opened", "WhatsApp Sent", "PAN", "Account", "Next Follow-up"];
     const csvValue = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
     const rows = prospects.map((item) => {
       const value = presentProspect(item);
-      return [value.company.name, value.contact.name, value.contact.mobile, value.contact.email, value.verificationStatus, value.address.city, value.address.state, value.business.areasOfOperation.join("; "), value.business.preferredSegments.join("; "), value.assignedEmployee?.name || "", value.profileCompletion, value.company.panMasked, value.bank.accountNumberMasked, value.nextFollowUpAt || ""].map(csvValue).join(",");
+      return [value.company.name, value.contact.name, value.contact.mobile, value.contact.email, value.verificationStatus, value.broker.lastCallOutcome, value.broker.projectInterest, value.broker.followUpAgenda, value.address.city, value.address.state, value.business.areasOfOperation.join("; "), value.business.preferredSegments.join("; "), value.assignedEmployee?.name || "", value.profileCompletion, value.whatsappOpened, value.whatsappSent, value.company.panMasked, value.bank.accountNumberMasked, value.nextFollowUpAt || ""].map(csvValue).join(",");
     });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="verified-cp-contacts-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -401,15 +445,40 @@ router.get("/admin/prospects/:id", auth, adminOnly, async (req, res) => {
 router.patch("/admin/prospects/allocate", auth, adminOnly, async (req, res) => {
   try {
     const employee = await CRMStaffAccount.findOne({ _id: req.body.employeeId, isActive: true, isDeleted: { $ne: true } });
+    const rangeFrom = Number(req.body.rangeFrom);
+    const rangeTo = Number(req.body.rangeTo);
+    const hasRange = Number.isInteger(rangeFrom) || Number.isInteger(rangeTo);
     const count = Number(req.body.count);
     if (!employee) return res.status(404).json({ error: "Active employee not found." });
-    if (!Number.isInteger(count) || count < 1 || count > 5000) return res.status(400).json({ error: "Choose between 1 and 5,000 contacts." });
-    const filter = prospectFilter({ ...req.body.filters, employeeId: "unassigned" });
-    const prospects = await CPProspect.find(filter).sort({ createdAt: 1 }).limit(count).select("_id").lean();
+    if (hasRange) {
+      if (!Number.isInteger(rangeFrom) || !Number.isInteger(rangeTo) || rangeFrom < 1 || rangeTo < rangeFrom || rangeTo - rangeFrom + 1 > 5000) {
+        return res.status(400).json({ error: "Enter a valid contact range containing no more than 5,000 contacts." });
+      }
+      if (!req.body.filters?.batchId) return res.status(400).json({ error: "Select an import batch before allocating a contact range." });
+    } else if (!Number.isInteger(count) || count < 1 || count > 5000) {
+      return res.status(400).json({ error: "Choose between 1 and 5,000 contacts." });
+    }
+
+    const filter = prospectFilter(req.body.filters || {});
+    if (hasRange) filter.sourceRowNumber = { $gte: rangeFrom + 1, $lte: rangeTo + 1 };
+    const selectedCount = hasRange ? await CPProspect.countDocuments(filter) : count;
+    const unassignedFilter = { ...filter, assignedEmployeeId: null };
+    const query = CPProspect.find(unassignedFilter).sort({ sourceRowNumber: 1, createdAt: 1 }).select("_id");
+    if (!hasRange) query.limit(count);
+    const prospects = await query.lean();
     if (!prospects.length) return res.status(409).json({ error: "No unassigned contacts match these filters." });
-    await CPProspect.updateMany({ _id: { $in: prospects.map((item) => item._id) }, assignedEmployeeId: null }, { $set: { assignedEmployeeId: employee._id, assignedAt: new Date(), assignedBy: req.user._id } });
+    const update = await CPProspect.updateMany({ _id: { $in: prospects.map((item) => item._id) }, assignedEmployeeId: null }, { $set: { assignedEmployeeId: employee._id, assignedAt: new Date(), assignedBy: req.user._id } });
+    const assignedCount = update.modifiedCount;
+    const skippedAssignedCount = hasRange ? Math.max(selectedCount - assignedCount, 0) : 0;
     const label = req.body.filters?.prospectType === "broker" ? "broker contact" : "CP contact";
-    return res.json({ message: `${prospects.length} imported ${label}${prospects.length === 1 ? "" : "s"} assigned to ${employee.name}.`, assignedCount: prospects.length });
+    const skippedMessage = skippedAssignedCount ? ` ${skippedAssignedCount} already assigned contact${skippedAssignedCount === 1 ? " was" : "s were"} skipped.` : "";
+    return res.json({
+      message: `${assignedCount} imported ${label}${assignedCount === 1 ? "" : "s"} assigned to ${employee.name}.${skippedMessage}`,
+      assignedCount,
+      selectedCount,
+      skippedAssignedCount,
+      ...(hasRange ? { rangeFrom, rangeTo } : {}),
+    });
   } catch (error) { return res.status(error.name === "CastError" ? 400 : 500).json({ error: "Unable to allocate imported CP contacts." }); }
 });
 
@@ -545,6 +614,107 @@ router.post("/mine/prospects/:id/verification", crmStaffAuth, requireCrmPermissi
     prospect.lastContactedAt = now; prospect.nextFollowUpAt = callbackAt; await prospect.save();
     return res.status(201).json({ message: callbackAt ? "Verification saved and callback scheduled." : "Verification result saved." });
   } catch (error) { return res.status(error.statusCode || (error.name === "ValidationError" ? 400 : 500)).json({ error: error.message || "Unable to save verification." }); }
+});
+
+router.post("/mine/prospects/:id/broker-result", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {
+  try {
+    const prospect = await ownedProspect(req, res); if (!prospect) return;
+    if (prospect.prospectType !== "broker") return res.status(400).json({ error: "This result is only available for broker contacts." });
+
+    const outcome = clean(req.body.outcome, 60);
+    const projectInterest = clean(req.body.projectInterest, 60);
+    const followUpAgenda = clean(req.body.followUpAgenda, 2000);
+    const note = clean(req.body.note, 2000);
+    if (!BROKER_CALL_OUTCOMES.has(outcome)) return res.status(400).json({ error: "Choose a valid broker call result." });
+    if (outcome === "answered" && !BROKER_PROJECT_INTERESTS.has(projectInterest)) return res.status(400).json({ error: "Choose whether the broker is interested in this project." });
+
+    let callbackAt = null;
+    if (outcome === "callback_requested" || (outcome === "answered" && projectInterest === "interested")) {
+      callbackAt = new Date(req.body.callbackAt);
+      if (Number.isNaN(callbackAt.getTime()) || callbackAt <= new Date()) return res.status(400).json({ error: "Choose a future follow-up date and time." });
+      if (!followUpAgenda) return res.status(400).json({ error: "Enter what should be discussed in the follow-up call." });
+    }
+
+    let areasOfOperation = prospect.business?.areasOfOperation || [];
+    let preferredSegments = prospect.business?.preferredSegments || [];
+    const changedFields = [];
+    if (outcome === "answered" && projectInterest === "not_interested") {
+      areasOfOperation = list(req.body.areasOfOperation);
+      preferredSegments = normalizedSegments(req.body.preferredSegments);
+      if (!areasOfOperation.length && !preferredSegments.length) return res.status(400).json({ error: "Enter at least one working area or property type." });
+      prospect.business.areasOfOperation = areasOfOperation;
+      prospect.business.preferredSegments = preferredSegments;
+      changedFields.push("business.areasOfOperation", "business.preferredSegments");
+    }
+
+    const interaction = await CPProspectInteraction.create({
+      prospectId: prospect._id,
+      employeeId: req.crmStaff._id,
+      action: "broker_call_result",
+      outcome,
+      note,
+      callbackAt,
+      changedFields,
+      metadata: { projectInterest: outcome === "answered" ? projectInterest : "", followUpAgenda, areasOfOperation, preferredSegments },
+    });
+    const now = new Date();
+    await CPProspectFollowUp.updateMany({ prospectId: prospect._id, employeeId: req.crmStaff._id, status: "pending" }, { $set: { status: "completed", completedAt: now } });
+    if (callbackAt) await CPProspectFollowUp.create({ prospectId: prospect._id, employeeId: req.crmStaff._id, sourceInteractionId: interaction._id, scheduledAt: callbackAt, note: followUpAgenda });
+
+    const status = outcome === "answered"
+      ? (projectInterest === "interested" ? "active" : "inactive")
+      : outcome;
+    prospect.broker.lastCallOutcome = outcome;
+    prospect.broker.projectInterest = outcome === "answered" ? projectInterest : "";
+    prospect.broker.followUpAgenda = followUpAgenda;
+    prospect.verificationStatus = status;
+    prospect.verifiedAt = status === "callback_requested" ? null : now;
+    prospect.lastContactedAt = now;
+    prospect.nextFollowUpAt = callbackAt;
+    await prospect.save();
+    return res.status(201).json({ message: callbackAt ? "Broker result saved and follow-up scheduled." : "Broker call result saved." });
+  } catch (error) {
+    return res.status(error.statusCode || (error.name === "ValidationError" ? 400 : 500)).json({ error: error.message || "Unable to save the broker call result." });
+  }
+});
+
+router.post("/mine/prospects/:id/whatsapp-open", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {
+  try {
+    const prospect = await ownedProspect(req, res); if (!prospect) return;
+    if (prospect.verificationStatus === "wrong_number") return res.status(400).json({ error: "WhatsApp is unavailable because this contact is marked as a wrong number." });
+    const audience = prospect.prospectType === "broker" ? "broker" : "imported_cp";
+    const template = await CPCRMMessageTemplate.findOne({ _id: req.body.templateId, isActive: true, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] });
+    if (!template) return res.status(400).json({ error: "Choose an active admin message template." });
+    const messageBody = clean(req.body.messageBody, 5000);
+    if (!messageBody) return res.status(400).json({ error: "The WhatsApp message is empty." });
+    const number = internationalPhone(prospect.contact.mobile);
+    if (number.length < 10) return res.status(400).json({ error: "The WhatsApp number is invalid." });
+    const interaction = await CPProspectInteraction.create({ prospectId: prospect._id, employeeId: req.crmStaff._id, action: "whatsapp_opened", messageBody, templateId: template._id });
+    prospect.whatsappOpened = (prospect.whatsappOpened || 0) + 1;
+    await prospect.save();
+    return res.status(201).json({ interactionId: String(interaction._id), whatsappUrl: `https://wa.me/${number}?text=${encodeURIComponent(messageBody)}` });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(400).json({ error: "Choose a valid WhatsApp template." });
+    return res.status(500).json({ error: "Unable to open WhatsApp." });
+  }
+});
+
+router.post("/mine/prospects/:id/whatsapp-result", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {
+  try {
+    const prospect = await ownedProspect(req, res); if (!prospect) return;
+    const outcome = clean(req.body.outcome, 30);
+    if (!WHATSAPP_OUTCOMES.has(outcome)) return res.status(400).json({ error: "Choose whether the WhatsApp message was sent." });
+    const interactionId = clean(req.body.interactionId, 80);
+    const opened = await CPProspectInteraction.exists({ _id: interactionId, prospectId: prospect._id, employeeId: req.crmStaff._id, action: "whatsapp_opened" });
+    if (!opened) return res.status(400).json({ error: "The matching WhatsApp action was not found." });
+    await CPProspectInteraction.create({ prospectId: prospect._id, employeeId: req.crmStaff._id, action: "whatsapp_result", outcome, note: clean(req.body.note, 2000), metadata: { openedInteractionId: interactionId } });
+    if (outcome === "sent") prospect.whatsappSent = (prospect.whatsappSent || 0) + 1;
+    await prospect.save();
+    return res.status(201).json({ message: "WhatsApp result saved." });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(400).json({ error: "The matching WhatsApp action is invalid." });
+    return res.status(500).json({ error: "Unable to save the WhatsApp result." });
+  }
 });
 
 router.post("/mine/prospects/:id/notes", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {

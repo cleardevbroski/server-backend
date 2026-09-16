@@ -31,6 +31,8 @@ const models = {
   ChannelPartner: require("../src/models/ChannelPartner"),
   ChannelPartnerClient: require("../src/models/ChannelPartnerClient"),
   ChannelPartnerCounter: require("../src/models/ChannelPartnerCounter"),
+  CPProspect: require("../src/models/CPProspect"),
+  CPProspectImportBatch: require("../src/models/CPProspectImportBatch"),
 };
 
 async function main() {

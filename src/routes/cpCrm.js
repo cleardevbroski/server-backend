@@ -19,6 +19,7 @@ const CPProspect = require("../models/CPProspect");
 const CPProspectFollowUp = require("../models/CPProspectFollowUp");
 
 const router = express.Router();
+const TEMPLATE_AUDIENCES = new Set(["all", "registered_cp", "imported_cp", "broker"]);
 const clean = (value, max = 2000) => String(value ?? "").trim().slice(0, max);
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const employeeLoginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 1000 : 8, message: { error: "Too many employee login attempts. Try again later." } });
@@ -109,7 +110,7 @@ async function profileDetail(profile) {
     CPCRMInteraction.find({ partnerId: profile.partnerId._id || profile.partnerId }).sort({ createdAt: -1 }).limit(100).populate("employeeId", "employeeId name").lean(),
     CPCRMFollowUp.find({ partnerId: profile.partnerId._id || profile.partnerId }).sort({ scheduledAt: -1 }).limit(50).populate("employeeId", "employeeId name").lean(),
     ChannelPartnerClient.countDocuments({ partnerId: profile.partnerId._id || profile.partnerId }),
-    CPCRMMessageTemplate.find({ isActive: true }).sort({ kind: 1, createdAt: -1 }).lean(),
+    CPCRMMessageTemplate.find({ isActive: true, $or: [{ audience: { $in: ["all", "registered_cp"] } }, { audience: { $exists: false } }] }).sort({ kind: 1, createdAt: -1 }).lean(),
   ]);
   return {
     profile: presentedProfile(profile), clientsCount,
@@ -359,7 +360,8 @@ router.post("/admin/templates", auth, adminOnly, [body("name").trim().isLength({
   try {
     if (validationError(req, res)) return;
     const attachments = Array.isArray(req.body.attachments) ? req.body.attachments.slice(0, 12).map((item) => ({ title: clean(item.title, 160), url: clean(item.url, 1000), mimeType: clean(item.mimeType, 100), bytes: Number(item.bytes) || 0 })).filter((item) => item.title && /^https:\/\//i.test(item.url)) : [];
-    const template = await CPCRMMessageTemplate.create({ name: clean(req.body.name, 120), kind: req.body.kind, projectName: clean(req.body.projectName, 180), body: clean(req.body.body, 5000), attachments, createdBy: req.user._id });
+    const audience = TEMPLATE_AUDIENCES.has(req.body.audience) ? req.body.audience : "all";
+    const template = await CPCRMMessageTemplate.create({ name: clean(req.body.name, 120), kind: req.body.kind, audience, projectName: clean(req.body.projectName, 180), body: clean(req.body.body, 5000), attachments, createdBy: req.user._id });
     return res.status(201).json({ message: "Message template created.", template: { ...template.toObject(), id: String(template._id) } });
   } catch { return res.status(500).json({ error: "Unable to create message template." }); }
 });
@@ -372,6 +374,7 @@ router.patch("/admin/templates/:id", auth, adminOnly, async (req, res) => {
     if (req.body.name !== undefined) template.name = clean(req.body.name, 120);
     if (req.body.body !== undefined) template.body = clean(req.body.body, 5000);
     if (req.body.projectName !== undefined) template.projectName = clean(req.body.projectName, 180);
+    if (req.body.audience !== undefined && TEMPLATE_AUDIENCES.has(req.body.audience)) template.audience = req.body.audience;
     await template.save();
     return res.json({ message: "Message template updated.", template: { ...template.toObject(), id: String(template._id) } });
   } catch (error) {
