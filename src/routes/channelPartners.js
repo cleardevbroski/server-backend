@@ -6,6 +6,10 @@ const ChannelPartnerCounter = require("../models/ChannelPartnerCounter");
 const ChannelPartnerClient = require("../models/ChannelPartnerClient");
 const ChannelPartnerClientClash = require("../models/ChannelPartnerClientClash");
 const ChannelPartnerRecovery = require("../models/ChannelPartnerRecovery");
+const CPCRMProfile = require("../models/CPCRMProfile");
+const CPCRMInteraction = require("../models/CPCRMInteraction");
+const CPCRMFollowUp = require("../models/CPCRMFollowUp");
+const CPCRMTaskItem = require("../models/CPCRMTaskItem");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const { buildChannelPartnerPayload } = require("../utils/channelPartnerPayload");
@@ -290,6 +294,12 @@ router.delete("/:id", auth, adminOnly, async (req, res) => {
 
     const clashResult = await ChannelPartnerClientClash.deleteMany({ $or: clashConditions });
     const clientResult = await ChannelPartnerClient.deleteMany({ partnerId: partner._id });
+    await Promise.all([
+      CPCRMProfile.deleteMany({ partnerId: partner._id }),
+      CPCRMInteraction.deleteMany({ partnerId: partner._id }),
+      CPCRMFollowUp.deleteMany({ partnerId: partner._id }),
+      CPCRMTaskItem.deleteMany({ partnerId: partner._id }),
+    ]);
     await ChannelPartnerRecovery.deleteMany({ partnerId: partner._id });
     await partner.deleteOne();
 

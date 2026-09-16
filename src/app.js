@@ -71,6 +71,7 @@ app.use(
   rateLimit({ windowMs: 15 * 60 * 1000, max: 30, message: { error: "Too many document uploads. Please try again later." } }),
   require("./routes/channelPartnerMedia")
 );
+app.use("/api/cp-crm-media", require("./routes/cpCrmMedia"));
 // Keep legacy JSON/base64 payloads small. Property images and documents up to
 // 50 MB use the streamed /api/property-media route above and never enter JSON.
 app.use(express.json({ limit: "10mb" }));
@@ -102,6 +103,8 @@ app.use("/api/leads", leadRoutes);
 app.use("/api/channel-partners", require("./routes/channelPartners"));
 app.use("/api/channel-partner-auth", require("./routes/channelPartnerAuth"));
 app.use("/api/channel-partner-leads", require("./routes/channelPartnerLeads"));
+app.use("/api/cp-crm", require("./routes/cpCrm"));
+app.use("/api/cp-prospects", require("./routes/cpProspects"));
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/client-activity", require("./routes/clientActivity"));
 app.use("/api/favorites", require("./routes/favorites"));
