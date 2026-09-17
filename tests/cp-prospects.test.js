@@ -148,6 +148,12 @@ describe("Imported CP verification", () => {
     const detail = await request(app).get(`/api/cp-prospects/mine/prospects/${brokerId}`).set("Authorization", `Bearer ${staffToken}`);
     expect(detail.body.templates.map((item) => item.id)).toContain(template.body.template.id);
 
+    const invalidWhatsappNumber = await request(app).patch(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-number`).set("Authorization", `Bearer ${staffToken}`).send({ whatsappMobile: "123" });
+    expect(invalidWhatsappNumber.status).toBe(400);
+    const whatsappNumber = await request(app).patch(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-number`).set("Authorization", `Bearer ${staffToken}`).send({ whatsappMobile: "09988776655" });
+    expect(whatsappNumber.status).toBe(200);
+    expect(whatsappNumber.body.whatsappMobile).toBe("9988776655");
+
     const missingFollowUp = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/broker-result`).set("Authorization", `Bearer ${staffToken}`).send({
       outcome: "answered", projectInterest: "interested",
     });
@@ -161,11 +167,24 @@ describe("Imported CP verification", () => {
     expect(storedBroker).toMatchObject({ verificationStatus: "active", broker: { lastCallOutcome: "answered", projectInterest: "interested", followUpAgenda: "Discuss project pricing" } });
     expect(await CPProspectFollowUp.countDocuments({ prospectId: brokerId, status: "pending" })).toBe(1);
 
+    const fallbackWhatsapp = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-open`).set("Authorization", `Bearer ${staffToken}`).send({
+      messageBody: "This employee text must not replace the fallback",
+    });
+    expect(fallbackWhatsapp.status).toBe(201);
+    expect(fallbackWhatsapp.body.whatsappUrl).toContain("https://wa.me/919988776655?text=");
+    expect(decodeURIComponent(fallbackWhatsapp.body.whatsappUrl)).toContain("?text=Hi");
+    const fallbackInteraction = await CPProspectInteraction.findById(fallbackWhatsapp.body.interactionId).lean();
+    expect(fallbackInteraction).toMatchObject({ action: "whatsapp_opened", messageBody: "Hi", templateId: null });
+    const fallbackResult = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-result`).set("Authorization", `Bearer ${staffToken}`).send({
+      outcome: "not_sent", interactionId: fallbackWhatsapp.body.interactionId,
+    });
+    expect(fallbackResult.status).toBe(201);
+
     const whatsapp = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-open`).set("Authorization", `Bearer ${staffToken}`).send({
       templateId: template.body.template.id, messageBody: "Hello Shared Contact, project details",
     });
     expect(whatsapp.status).toBe(201);
-    expect(whatsapp.body.whatsappUrl).toContain("https://wa.me/919876543288?text=");
+    expect(whatsapp.body.whatsappUrl).toContain("https://wa.me/919988776655?text=");
     const whatsappResult = await request(app).post(`/api/cp-prospects/mine/prospects/${brokerId}/whatsapp-result`).set("Authorization", `Bearer ${staffToken}`).send({
       outcome: "sent", interactionId: whatsapp.body.interactionId,
     });
@@ -176,7 +195,7 @@ describe("Imported CP verification", () => {
     });
     expect(notInterested.status).toBe(201);
     storedBroker = await CPProspect.findById(brokerId).lean();
-    expect(storedBroker).toMatchObject({ verificationStatus: "inactive", whatsappOpened: 1, whatsappSent: 1, broker: { projectInterest: "not_interested" } });
+    expect(storedBroker).toMatchObject({ verificationStatus: "inactive", whatsappOpened: 2, whatsappSent: 1, broker: { projectInterest: "not_interested" } });
     expect(storedBroker.business.areasOfOperation).toEqual(["Whitefield", "Varthur"]);
     expect(storedBroker.business.preferredSegments).toEqual(["apartments", "plots"]);
     expect(await CPProspectInteraction.countDocuments({ prospectId: brokerId, action: "broker_call_result" })).toBe(2);

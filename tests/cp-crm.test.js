@@ -69,11 +69,18 @@ describe("CP Management CRM", () => {
     });
     expect(template.status).toBe(201);
 
+    const whatsappNumber = await request(app).patch(`/api/cp-crm/mine/partners/${partnerId}/whatsapp-number`).set("Authorization", `Bearer ${staffToken}`).send({ whatsappMobile: "+91 99887 76655" });
+    expect(whatsappNumber.status).toBe(200);
+    expect(whatsappNumber.body.whatsappMobile).toBe("9988776655");
+
     const whatsapp = await request(app).post(`/api/cp-crm/mine/partners/${partnerId}/whatsapp-open`).set("Authorization", `Bearer ${staffToken}`).send({
       templateId: template.body.template.id, messageBody: "Hello Ravi, project details: https://example.com/project",
     });
     expect(whatsapp.status).toBe(201);
-    expect(whatsapp.body.whatsappUrl).toContain("https://wa.me/919876543210?text=");
+    expect(whatsapp.body.whatsappUrl).toContain("https://wa.me/919988776655?text=");
+    const profile = await CPCRMProfile.findOne({ partnerId }).lean();
+    expect(profile.whatsappMobile).toBe("9988776655");
+    expect(await CPCRMInteraction.countDocuments({ action: "whatsapp_number_updated" })).toBe(1);
 
     const sent = await request(app).post(`/api/cp-crm/mine/partners/${partnerId}/whatsapp-result`).set("Authorization", `Bearer ${staffToken}`).send({ outcome: "sent", interactionId: whatsapp.body.interactionId });
     expect(sent.status).toBe(201);
@@ -84,7 +91,7 @@ describe("CP Management CRM", () => {
     expect(employees.body.employees[0].metrics).toMatchObject({ assigned: 1, contacted: 1, callResults: 1, callbacksScheduled: 1, whatsappSent: 1 });
     const activity = await request(app).get(`/api/cp-crm/admin/employees/${created.body.employee.id}/activity`).set("Authorization", `Bearer ${adminToken}`);
     expect(activity.status).toBe(200);
-    expect(activity.body.interactions).toHaveLength(4);
+    expect(activity.body.interactions).toHaveLength(5);
     expect(activity.body.followUps[0]).toMatchObject({ status: "pending", partner: { companyName: "CRM Realty" } });
   }, 60000);
 

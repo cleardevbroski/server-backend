@@ -25,6 +25,7 @@ const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g
 const employeeLoginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 1000 : 8, message: { error: "Too many employee login attempts. Try again later." } });
 const CALL_OUTCOMES = new Set(["no_answer", "busy", "connected", "callback_requested", "interested", "has_clients", "needs_project_details", "not_interested", "wrong_number", "do_not_contact", "other"]);
 const WHATSAPP_OUTCOMES = new Set(["sent", "not_sent", "failed"]);
+const MOBILE = /^[6-9][0-9]{9}$/;
 const DEFAULT_PERMISSIONS = ["cp_crm.view", "cp_crm.contact"];
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -72,6 +73,7 @@ function presentedProfile(profile) {
     lastContactedAt: profile.lastContactedAt, nextFollowUpAt: profile.nextFollowUpAt,
     callAttempts: profile.callAttempts || 0, completedCalls: profile.completedCalls || 0,
     whatsappOpened: profile.whatsappOpened || 0, whatsappSent: profile.whatsappSent || 0,
+    whatsappMobile: profile.whatsappMobile || "", whatsappUpdatedAt: profile.whatsappUpdatedAt || null,
   };
 }
 
@@ -88,6 +90,13 @@ function internationalPhone(value) {
   let digits = String(value || "").replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
   if (digits.length === 10) digits = `91${digits}`;
+  return digits;
+}
+
+function normalizeIndianMobile(value) {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) digits = digits.slice(1);
   return digits;
 }
 
@@ -316,7 +325,7 @@ router.get("/admin/partners", auth, adminOnly, async (req, res) => {
     let profiles = await populateProfiles(CPCRMProfile.find(filter).sort({ nextFollowUpAt: 1, createdAt: -1 }));
     profiles = profiles.filter((profile) => profile.partnerId);
     const search = clean(req.query.search, 120).toLowerCase();
-    if (search) profiles = profiles.filter((profile) => Object.values(safePartner(profile.partnerId)).some((value) => String(value || "").toLowerCase().includes(search)));
+    if (search) profiles = profiles.filter((profile) => profile.whatsappMobile?.includes(search) || Object.values(safePartner(profile.partnerId)).some((value) => String(value || "").toLowerCase().includes(search)));
     const page = Math.max(Number(req.query.page) || 1, 1); const limit = Math.min(Math.max(Number(req.query.limit) || 25, 1), 100);
     const paged = profiles.slice((page - 1) * limit, page * limit);
     return res.json({ partners: paged.map(presentedProfile), pagination: { page, limit, total: profiles.length, pages: Math.ceil(profiles.length / limit) } });
@@ -466,14 +475,36 @@ router.post("/mine/partners/:partnerId/whatsapp-open", crmStaffAuth, requireCrmP
     const profile = await ownedProfile(req, res); if (!profile) return;
     const messageBody = clean(req.body.messageBody, 5000);
     if (!messageBody) return res.status(400).json({ error: "Choose or enter a WhatsApp message." });
-    const interaction = await CPCRMInteraction.create({ partnerId: req.params.partnerId, employeeId: req.crmStaff._id, action: "whatsapp_opened", messageBody, templateId: req.body.templateId || null });
+    const whatsappMobile = profile.whatsappMobile || profile.partnerId.contact.mobile;
+    const number = internationalPhone(whatsappMobile);
+    if (number.length < 10) return res.status(400).json({ error: "The WhatsApp number is invalid." });
+    const interaction = await CPCRMInteraction.create({ partnerId: req.params.partnerId, employeeId: req.crmStaff._id, action: "whatsapp_opened", messageBody, templateId: req.body.templateId || null, metadata: { whatsappMobile, usesAlternateNumber: Boolean(profile.whatsappMobile) } });
     profile.whatsappOpened += 1; profile.lastInteractionAt = interaction.createdAt; await profile.save();
-    const number = internationalPhone(profile.partnerId.contact.mobile);
-    if (number.length < 10) return res.status(400).json({ error: "The registered WhatsApp number is invalid." });
     return res.status(201).json({ interactionId: String(interaction._id), whatsappUrl: `https://wa.me/${number}?text=${encodeURIComponent(messageBody)}` });
   } catch (error) {
     if (error.name === "CastError") return res.status(400).json({ error: "Invalid WhatsApp template." });
     return res.status(500).json({ error: "Unable to open WhatsApp." });
+  }
+});
+
+router.patch("/mine/partners/:partnerId/whatsapp-number", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {
+  try {
+    const profile = await ownedProfile(req, res); if (!profile) return;
+    const previousNumber = profile.whatsappMobile || "";
+    const whatsappMobile = req.body.whatsappMobile ? normalizeIndianMobile(req.body.whatsappMobile) : "";
+    if (whatsappMobile && !MOBILE.test(whatsappMobile)) return res.status(400).json({ error: "Enter a valid 10-digit Indian WhatsApp number." });
+    if (whatsappMobile === profile.partnerId.contact.mobile) return res.status(400).json({ error: "This is already the primary mobile number. Use the primary number instead." });
+    if (whatsappMobile === previousNumber) return res.json({ message: "WhatsApp number is already up to date.", whatsappMobile, whatsappUpdatedAt: profile.whatsappUpdatedAt });
+    const now = new Date();
+    profile.whatsappMobile = whatsappMobile;
+    profile.whatsappUpdatedAt = now;
+    profile.whatsappUpdatedBy = req.crmStaff._id;
+    profile.lastInteractionAt = now;
+    await profile.save();
+    await CPCRMInteraction.create({ partnerId: req.params.partnerId, employeeId: req.crmStaff._id, action: "whatsapp_number_updated", note: whatsappMobile ? `WhatsApp number changed to ${whatsappMobile}.` : `WhatsApp reset to primary number ${profile.partnerId.contact.mobile}.`, metadata: { previousNumber, whatsappMobile, usesPrimaryNumber: !whatsappMobile } });
+    return res.json({ message: whatsappMobile ? "WhatsApp number saved." : "WhatsApp reset to the primary mobile number.", whatsappMobile, whatsappUpdatedAt: now });
+  } catch (error) {
+    return res.status(error.name === "CastError" ? 404 : 500).json({ error: "Unable to update the WhatsApp number." });
   }
 });
 

@@ -24,6 +24,8 @@ const cpProspectSchema = new mongoose.Schema({
   callAttempts: { type: Number, default: 0, min: 0 },
   whatsappOpened: { type: Number, default: 0, min: 0 },
   whatsappSent: { type: Number, default: 0, min: 0 },
+  whatsappUpdatedAt: { type: Date, default: null },
+  whatsappUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "CRMStaffAccount", default: null },
   profileCompletion: { type: Number, default: 0, min: 0, max: 100, index: true },
   broker: {
     lastCallOutcome: { type: String, enum: BROKER_CALL_OUTCOMES, default: "", index: true },
@@ -47,6 +49,7 @@ const cpProspectSchema = new mongoose.Schema({
     mobile: { type: String, required: true, trim: true },
     mobileHash: { type: String, required: true, unique: true, select: false },
     alternateMobile: { type: String, default: "", trim: true },
+    whatsappMobile: { type: String, default: "", trim: true },
     email: { type: String, default: "", lowercase: true, trim: true, maxlength: 254 },
   },
   address: {

@@ -14,6 +14,9 @@ const cpCrmProfileSchema = new mongoose.Schema({
   completedCalls: { type: Number, default: 0, min: 0 },
   whatsappOpened: { type: Number, default: 0, min: 0 },
   whatsappSent: { type: Number, default: 0, min: 0 },
+  whatsappMobile: { type: String, default: "", trim: true },
+  whatsappUpdatedAt: { type: Date, default: null },
+  whatsappUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: "CRMStaffAccount", default: null },
 }, { timestamps: true });
 
 cpCrmProfileSchema.index({ assignedEmployeeId: 1, stage: 1, nextFollowUpAt: 1 });

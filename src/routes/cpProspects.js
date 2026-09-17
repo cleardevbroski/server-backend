@@ -113,7 +113,8 @@ function presentProspect(prospect) {
     verificationStatus: prospect.verificationStatus, verifiedAt: prospect.verifiedAt,
     lastContactedAt: prospect.lastContactedAt, nextFollowUpAt: prospect.nextFollowUpAt,
     callAttempts: prospect.callAttempts || 0, whatsappOpened: prospect.whatsappOpened || 0,
-    whatsappSent: prospect.whatsappSent || 0, profileCompletion: prospect.profileCompletion || 0,
+    whatsappSent: prospect.whatsappSent || 0, whatsappUpdatedAt: prospect.whatsappUpdatedAt || null,
+    profileCompletion: prospect.profileCompletion || 0,
     broker: {
       lastCallOutcome: prospect.broker?.lastCallOutcome || "",
       projectInterest: prospect.broker?.projectInterest || "",
@@ -209,7 +210,7 @@ function prospectFilter(query, employeeId) {
   if (query.search) {
     const search = new RegExp(escapeRegex(clean(query.search, 120)), "i");
     filter.$or = [
-      { "company.name": search }, { "contact.name": search }, { "contact.mobile": search },
+      { "company.name": search }, { "contact.name": search }, { "contact.mobile": search }, { "contact.whatsappMobile": search },
       { "contact.email": search }, { "address.city": search }, { "business.areasOfOperation": search },
     ];
   }
@@ -422,11 +423,11 @@ router.get("/admin/prospects", auth, adminOnly, async (req, res) => {
 router.get("/admin/prospects/export", auth, adminOnly, async (req, res) => {
   try {
     const prospects = await populateProspects(CPProspect.find(prospectFilter(req.query)).sort({ createdAt: 1 }).limit(50000));
-    const header = ["Company", "Contact", "Mobile", "Email", "Status", "Broker Call Result", "Project Interest", "Follow-up Agenda", "City", "State", "Areas", "Property Types", "Employee", "Completion", "WhatsApp Opened", "WhatsApp Sent", "PAN", "Account", "Next Follow-up"];
+    const header = ["Company", "Contact", "Mobile", "WhatsApp Mobile", "Email", "Status", "Broker Call Result", "Project Interest", "Follow-up Agenda", "City", "State", "Areas", "Property Types", "Employee", "Completion", "WhatsApp Opened", "WhatsApp Sent", "PAN", "Account", "Next Follow-up"];
     const csvValue = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
     const rows = prospects.map((item) => {
       const value = presentProspect(item);
-      return [value.company.name, value.contact.name, value.contact.mobile, value.contact.email, value.verificationStatus, value.broker.lastCallOutcome, value.broker.projectInterest, value.broker.followUpAgenda, value.address.city, value.address.state, value.business.areasOfOperation.join("; "), value.business.preferredSegments.join("; "), value.assignedEmployee?.name || "", value.profileCompletion, value.whatsappOpened, value.whatsappSent, value.company.panMasked, value.bank.accountNumberMasked, value.nextFollowUpAt || ""].map(csvValue).join(",");
+      return [value.company.name, value.contact.name, value.contact.mobile, value.contact.whatsappMobile || value.contact.mobile, value.contact.email, value.verificationStatus, value.broker.lastCallOutcome, value.broker.projectInterest, value.broker.followUpAgenda, value.address.city, value.address.state, value.business.areasOfOperation.join("; "), value.business.preferredSegments.join("; "), value.assignedEmployee?.name || "", value.profileCompletion, value.whatsappOpened, value.whatsappSent, value.company.panMasked, value.bank.accountNumberMasked, value.nextFollowUpAt || ""].map(csvValue).join(",");
     });
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="verified-cp-contacts-${new Date().toISOString().slice(0, 10)}.csv"`);
@@ -681,21 +682,50 @@ router.post("/mine/prospects/:id/broker-result", crmStaffAuth, requireCrmPermiss
 router.post("/mine/prospects/:id/whatsapp-open", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {
   try {
     const prospect = await ownedProspect(req, res); if (!prospect) return;
-    if (prospect.verificationStatus === "wrong_number") return res.status(400).json({ error: "WhatsApp is unavailable because this contact is marked as a wrong number." });
+    if (prospect.verificationStatus === "wrong_number" && !prospect.contact.whatsappMobile) return res.status(400).json({ error: "Add a different WhatsApp number before messaging this wrong-number contact." });
     const audience = prospect.prospectType === "broker" ? "broker" : "imported_cp";
-    const template = await CPCRMMessageTemplate.findOne({ _id: req.body.templateId, isActive: true, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] });
-    if (!template) return res.status(400).json({ error: "Choose an active admin message template." });
-    const messageBody = clean(req.body.messageBody, 5000);
+    let template = null;
+    let messageBody = "";
+    if (req.body.templateId) {
+      template = await CPCRMMessageTemplate.findOne({ _id: req.body.templateId, isActive: true, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] });
+      if (!template) return res.status(400).json({ error: "Choose an active admin message template." });
+      messageBody = clean(req.body.messageBody, 5000);
+    } else if (prospect.prospectType === "broker") {
+      messageBody = "Hi";
+    } else {
+      return res.status(400).json({ error: "Choose an active admin message template." });
+    }
     if (!messageBody) return res.status(400).json({ error: "The WhatsApp message is empty." });
-    const number = internationalPhone(prospect.contact.mobile);
+    const whatsappMobile = prospect.contact.whatsappMobile || prospect.contact.mobile;
+    const number = internationalPhone(whatsappMobile);
     if (number.length < 10) return res.status(400).json({ error: "The WhatsApp number is invalid." });
-    const interaction = await CPProspectInteraction.create({ prospectId: prospect._id, employeeId: req.crmStaff._id, action: "whatsapp_opened", messageBody, templateId: template._id });
+    const interaction = await CPProspectInteraction.create({ prospectId: prospect._id, employeeId: req.crmStaff._id, action: "whatsapp_opened", messageBody, templateId: template?._id || null, metadata: { whatsappMobile, usesAlternateNumber: Boolean(prospect.contact.whatsappMobile) } });
     prospect.whatsappOpened = (prospect.whatsappOpened || 0) + 1;
     await prospect.save();
     return res.status(201).json({ interactionId: String(interaction._id), whatsappUrl: `https://wa.me/${number}?text=${encodeURIComponent(messageBody)}` });
   } catch (error) {
     if (error.name === "CastError") return res.status(400).json({ error: "Choose a valid WhatsApp template." });
     return res.status(500).json({ error: "Unable to open WhatsApp." });
+  }
+});
+
+router.patch("/mine/prospects/:id/whatsapp-number", crmStaffAuth, requireCrmPermission("cp_crm.contact"), async (req, res) => {
+  try {
+    const prospect = await ownedProspect(req, res); if (!prospect) return;
+    const previousNumber = prospect.contact.whatsappMobile || "";
+    const whatsappMobile = req.body.whatsappMobile ? normalizePhone(req.body.whatsappMobile) : "";
+    if (whatsappMobile && !MOBILE.test(whatsappMobile)) return res.status(400).json({ error: "Enter a valid 10-digit Indian WhatsApp number." });
+    if (whatsappMobile === prospect.contact.mobile) return res.status(400).json({ error: "This is already the primary mobile number. Use the primary number instead." });
+    if (whatsappMobile === previousNumber) return res.json({ message: "WhatsApp number is already up to date.", whatsappMobile, whatsappUpdatedAt: prospect.whatsappUpdatedAt });
+    const now = new Date();
+    prospect.contact.whatsappMobile = whatsappMobile;
+    prospect.whatsappUpdatedAt = now;
+    prospect.whatsappUpdatedBy = req.crmStaff._id;
+    await prospect.save();
+    await CPProspectInteraction.create({ prospectId: prospect._id, employeeId: req.crmStaff._id, action: "whatsapp_number_updated", note: whatsappMobile ? `WhatsApp number changed to ${whatsappMobile}.` : `WhatsApp reset to primary number ${prospect.contact.mobile}.`, changedFields: ["contact.whatsappMobile"], metadata: { previousNumber, whatsappMobile, usesPrimaryNumber: !whatsappMobile } });
+    return res.json({ message: whatsappMobile ? "WhatsApp number saved." : "WhatsApp reset to the primary mobile number.", whatsappMobile, whatsappUpdatedAt: now });
+  } catch (error) {
+    return res.status(error.name === "CastError" ? 404 : 500).json({ error: "Unable to update the WhatsApp number." });
   }
 });
 

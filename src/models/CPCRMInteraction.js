@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const ACTIONS = ["call_started", "call_result", "whatsapp_opened", "whatsapp_result", "note"];
+const ACTIONS = ["call_started", "call_result", "whatsapp_number_updated", "whatsapp_opened", "whatsapp_result", "note"];
 const OUTCOMES = [
   "", "no_answer", "busy", "connected", "callback_requested", "interested", "has_clients",
   "needs_project_details", "not_interested", "wrong_number", "do_not_contact", "other",
