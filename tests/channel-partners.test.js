@@ -328,6 +328,29 @@ describe("Channel partners API", () => {
     expect(missingReason.status).toBe(400);
   });
 
+  it("registers a general client requirement without a published project", async () => {
+    const partner = await request(app).post("/api/channel-partners").send(validApplication());
+    const session = await request(app).post("/api/channel-partner-leads/session").send({ partnerCode: partner.body.application.partnerCode });
+    const registered = await request(app).post("/api/channel-partner-leads").set("Authorization", `Bearer ${session.body.token}`).send({
+      clientName: "General Buyer",
+      mobile: "9986465940",
+      preferredLocation: "Whitefield",
+      propertyType: "apartments",
+      budget: "1.2 Cr",
+      notes: "Looking for a 3 BHK",
+      consentAccepted: true,
+    });
+    expect(registered.status).toBe(201);
+    expect(registered.body.client).toMatchObject({
+      requirementType: "general_requirement",
+      projectTitle: "General requirement",
+      preferredLocation: "Whitefield",
+      propertyType: "apartments",
+    });
+    const stored = await ChannelPartnerClient.findOne();
+    expect(stored).toMatchObject({ requirementType: "general_requirement", projectId: null, projectTitle: "", preferredLocation: "Whitefield", propertyType: "apartments" });
+  }, 60000);
+
   it("registers clients by partner code and blocks duplicates during the active 90 days", async () => {
     const firstPartner = await request(app).post("/api/channel-partners").send(validApplication());
     const secondInput = validApplication();

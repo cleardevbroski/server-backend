@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const auth = require("../middleware/auth");
 const adminOnly = require("../middleware/adminOnly");
 const { crmStaffAuth, requireCrmPermission } = require("../middleware/crmStaffAuth");
@@ -446,12 +447,18 @@ router.get("/admin/prospects/:id", auth, adminOnly, async (req, res) => {
 router.patch("/admin/prospects/allocate", auth, adminOnly, async (req, res) => {
   try {
     const employee = await CRMStaffAccount.findOne({ _id: req.body.employeeId, isActive: true, isDeleted: { $ne: true } });
+    const prospectIds = Array.isArray(req.body.prospectIds) ? [...new Set(req.body.prospectIds.map(String))] : [];
+    const hasSelection = prospectIds.length > 0;
     const rangeFrom = Number(req.body.rangeFrom);
     const rangeTo = Number(req.body.rangeTo);
     const hasRange = Number.isInteger(rangeFrom) || Number.isInteger(rangeTo);
     const count = Number(req.body.count);
     if (!employee) return res.status(404).json({ error: "Active employee not found." });
-    if (hasRange) {
+    if (hasSelection) {
+      if (prospectIds.length > 5000 || prospectIds.some((id) => !mongoose.isValidObjectId(id))) {
+        return res.status(400).json({ error: "Select between 1 and 5,000 valid contacts." });
+      }
+    } else if (hasRange) {
       if (!Number.isInteger(rangeFrom) || !Number.isInteger(rangeTo) || rangeFrom < 1 || rangeTo < rangeFrom || rangeTo - rangeFrom + 1 > 5000) {
         return res.status(400).json({ error: "Enter a valid contact range containing no more than 5,000 contacts." });
       }
@@ -460,17 +467,19 @@ router.patch("/admin/prospects/allocate", auth, adminOnly, async (req, res) => {
       return res.status(400).json({ error: "Choose between 1 and 5,000 contacts." });
     }
 
-    const filter = prospectFilter(req.body.filters || {});
-    if (hasRange) filter.sourceRowNumber = { $gte: rangeFrom + 1, $lte: rangeTo + 1 };
-    const selectedCount = hasRange ? await CPProspect.countDocuments(filter) : count;
+    const filter = hasSelection
+      ? { _id: { $in: prospectIds }, prospectType: normalizedProspectType(req.body.filters?.prospectType) }
+      : prospectFilter(req.body.filters || {});
+    if (!hasSelection && hasRange) filter.sourceRowNumber = { $gte: rangeFrom + 1, $lte: rangeTo + 1 };
+    const selectedCount = hasSelection || hasRange ? await CPProspect.countDocuments(filter) : count;
     const unassignedFilter = { ...filter, assignedEmployeeId: null };
     const query = CPProspect.find(unassignedFilter).sort({ sourceRowNumber: 1, createdAt: 1 }).select("_id");
-    if (!hasRange) query.limit(count);
+    if (!hasSelection && !hasRange) query.limit(count);
     const prospects = await query.lean();
     if (!prospects.length) return res.status(409).json({ error: "No unassigned contacts match these filters." });
     const update = await CPProspect.updateMany({ _id: { $in: prospects.map((item) => item._id) }, assignedEmployeeId: null }, { $set: { assignedEmployeeId: employee._id, assignedAt: new Date(), assignedBy: req.user._id } });
     const assignedCount = update.modifiedCount;
-    const skippedAssignedCount = hasRange ? Math.max(selectedCount - assignedCount, 0) : 0;
+    const skippedAssignedCount = hasSelection || hasRange ? Math.max(selectedCount - assignedCount, 0) : 0;
     const label = req.body.filters?.prospectType === "broker" ? "broker contact" : "CP contact";
     const skippedMessage = skippedAssignedCount ? ` ${skippedAssignedCount} already assigned contact${skippedAssignedCount === 1 ? " was" : "s were"} skipped.` : "";
     return res.json({
@@ -478,6 +487,7 @@ router.patch("/admin/prospects/allocate", auth, adminOnly, async (req, res) => {
       assignedCount,
       selectedCount,
       skippedAssignedCount,
+      ...(hasSelection ? { prospectIds } : {}),
       ...(hasRange ? { rangeFrom, rangeTo } : {}),
     });
   } catch (error) { return res.status(error.name === "CastError" ? 400 : 500).json({ error: "Unable to allocate imported CP contacts." }); }

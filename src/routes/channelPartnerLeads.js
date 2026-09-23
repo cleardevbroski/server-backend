@@ -53,7 +53,10 @@ function clientRecord(client) {
     clientName: client.clientName,
     mobileMasked: `••••••${client.mobileLast4}`,
     projectId: client.projectId?.toString(),
-    projectTitle: client.projectTitle,
+    requirementType: client.requirementType || (client.projectId ? "specific_project" : "general_requirement"),
+    projectTitle: client.projectTitle || "General requirement",
+    preferredLocation: client.preferredLocation || "",
+    propertyType: client.propertyType || "",
     budget: client.budget,
     status: client.status,
     registeredAt: client.registeredAt,
@@ -82,7 +85,10 @@ function adminClientRecord(client) {
     clientName: client.clientName,
     mobile,
     email,
-    projectTitle: client.projectTitle,
+    requirementType: client.requirementType || (client.projectId ? "specific_project" : "general_requirement"),
+    projectTitle: client.projectTitle || "General requirement",
+    preferredLocation: client.preferredLocation || "",
+    propertyType: client.propertyType || "",
     budget: client.budget,
     status: client.status,
     registeredAt: client.registeredAt,
@@ -153,7 +159,7 @@ function clashRecord(clash, partnerId) {
     clientName: clash.clientName,
     mobileMasked: `••••••${clash.mobileLast4}`,
     projectId: clash.projectId?.toString(),
-    projectTitle: clash.projectTitle,
+    projectTitle: clash.projectTitle || "General requirement",
     attemptedAt: clash.attemptedAt,
     outcome: clash.outcome,
   };
@@ -163,7 +169,7 @@ function duplicateEmailDetails(existing) {
   return {
     clientName: existing.clientName,
     mobileLast4: existing.mobileLast4,
-    projectTitle: existing.projectTitle,
+    projectTitle: existing.projectTitle || "General requirement",
     ownershipExpiresAt: existing.ownershipExpiresAt,
     currentStatus: existing.status,
   };
@@ -224,8 +230,8 @@ async function respondToActiveDuplicate(res, existing, attemptingPartner, attemp
       mobileHash: attempt.mobileHash,
       mobileLast4: attempt.mobileLast4 || existing.mobileLast4,
       clientName: attempt.clientName || existing.clientName,
-      projectId: attempt.projectId || existing.projectId,
-      projectTitle: attempt.projectTitle || existing.projectTitle,
+      projectId: Object.hasOwn(attempt, "projectId") ? attempt.projectId : existing.projectId,
+      projectTitle: attempt.projectTitle || existing.projectTitle || "",
       attemptedAt: new Date(),
     });
   } catch (clashError) {
@@ -374,18 +380,23 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
     const mobile = normalizeMobile(req.body?.mobile);
     const email = clean(req.body?.email, 180).toLowerCase();
     const projectId = clean(req.body?.projectId, 50);
+    const preferredLocation = clean(req.body?.preferredLocation, 180);
+    const propertyType = clean(req.body?.propertyType, 80);
     const budget = clean(req.body?.budget, 100);
     const notes = clean(req.body?.notes, 1000);
     const errors = [];
     if (clientName.length < 2) errors.push("Client name is required.");
     if (!MOBILE.test(mobile)) errors.push("Enter a valid 10-digit Indian mobile number.");
     if (email && !EMAIL.test(email)) errors.push("Enter a valid email address.");
-    if (!mongoose.isValidObjectId(projectId)) errors.push("Choose a valid project.");
+    if (projectId && !mongoose.isValidObjectId(projectId)) errors.push("Choose a valid project.");
     if (req.body?.consentAccepted !== true) errors.push("Client consent confirmation is required.");
     if (errors.length) return res.status(400).json({ error: errors[0], errors });
 
-    const project = await Property.findOne({ _id: projectId, published: true, status: { $in: ["published", "approved"] } }).select("title").lean();
-    if (!project) return res.status(400).json({ error: "Choose an available project." });
+    const project = projectId
+      ? await Property.findOne({ _id: projectId, published: true, status: { $in: ["published", "approved"] } }).select("title").lean()
+      : null;
+    if (projectId && !project) return res.status(400).json({ error: "Choose an available project." });
+    const projectTitle = project?.title || "General requirement";
 
     const idempotencyRaw = clean(req.get("Idempotency-Key"), 160);
     const idempotencyHash = idempotencyRaw ? hashLookup(idempotencyRaw, `partner-lead:${req.channelPartner._id}`) : "";
@@ -404,7 +415,7 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
       },
     );
     const existing = await ChannelPartnerClient.findOne({ mobileHash, claimActive: true });
-    const attemptDetails = { mobileHash, mobileLast4: mobile.slice(-4), clientName, projectId: project._id, projectTitle: project.title };
+    const attemptDetails = { mobileHash, mobileLast4: mobile.slice(-4), clientName, projectId: project?._id || null, projectTitle };
     if (existing) return respondToActiveDuplicate(res, existing, req.channelPartner, attemptDetails);
 
     const registeredAt = now;
@@ -421,8 +432,11 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
         mobileLast4: mobile.slice(-4),
         emailEncrypted: email ? encryptSensitive(email) : "",
         emailHash: email ? hashLookup(email, "partner-client-email") : "",
-        projectId: project._id,
-        projectTitle: project.title,
+        requirementType: project ? "specific_project" : "general_requirement",
+        projectId: project?._id || null,
+        projectTitle: project?.title || "",
+        preferredLocation,
+        propertyType,
         budget,
         notes,
         consentAcceptedAt: now,
@@ -450,7 +464,7 @@ router.post("/", registerLimiter, partnerSession, async (req, res) => {
         leadNumber: client.leadNumber,
         clientName,
         mobileLast4: mobile.slice(-4),
-        projectTitle: project.title,
+        projectTitle,
         registeredAt,
         ownershipExpiresAt,
       });
@@ -554,6 +568,8 @@ router.get("/admin/clients", auth, adminOnly, async (req, res) => {
         { leadNumber: search },
         { clientName: search },
         { projectTitle: search },
+        { preferredLocation: search },
+        { propertyType: search },
         ...(partners.length ? [{ partnerId: { $in: partners.map((partner) => partner._id) } }] : []),
       ];
     }
@@ -586,7 +602,7 @@ router.post("/admin/clients/:id/resend-email", auth, adminOnly, async (req, res)
       leadNumber: client.leadNumber,
       clientName: client.clientName,
       mobileLast4: client.mobileLast4,
-      projectTitle: client.projectTitle,
+      projectTitle: client.projectTitle || "General requirement",
       registeredAt: client.registeredAt,
       ownershipExpiresAt: client.ownershipExpiresAt,
     });

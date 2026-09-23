@@ -89,6 +89,15 @@ describe("Imported CP verification", () => {
     expect(detail.status).toBe(200);
     expect(detail.body.prospect.verificationStatus).toBe("active");
     expect(detail.body.interactions.map((item) => item.action)).toEqual(expect.arrayContaining(["call_started", "profile_updated", "verification_result"]));
+
+    const employees = await request(app).get("/api/cp-crm/admin/employees").set("Authorization", `Bearer ${adminToken}`);
+    const employeeRow = employees.body.employees.find((item) => item.id === employee.id);
+    expect(employeeRow.metrics).toMatchObject({ assigned: 1, importedAssigned: 1, active: 1, callResults: 1 });
+    const employeeActivity = await request(app).get(`/api/cp-crm/admin/employees/${employee.id}/activity`).set("Authorization", `Bearer ${adminToken}`);
+    expect(employeeActivity.status).toBe(200);
+    expect(employeeActivity.body.interactions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: "imported", action: "verification_result", partner: expect.objectContaining({ companyName: "East Realty" }) }),
+    ]));
   }, 60000);
 
   it("requires a future callback and keeps callbacks in the employee queue", async () => {
@@ -232,5 +241,14 @@ describe("Imported CP verification", () => {
       filters: { prospectType: "broker", batchId },
     });
     expect(repeated.status).toBe(409);
+
+    const imported = await CPProspect.find({ importBatchId: batchId }).sort({ sourceRowNumber: 1 }).lean();
+    const selected = await request(app).patch("/api/cp-prospects/admin/prospects/allocate").set("Authorization", `Bearer ${adminToken}`).send({
+      employeeId: employee.id,
+      prospectIds: [String(imported[1]._id), String(imported[4]._id)],
+      filters: { prospectType: "broker" },
+    });
+    expect(selected.status).toBe(200);
+    expect(selected.body).toMatchObject({ assignedCount: 1, selectedCount: 2, skippedAssignedCount: 1 });
   }, 60000);
 });

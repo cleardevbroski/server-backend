@@ -7,8 +7,8 @@ const channelPartnerClientClashSchema = new mongoose.Schema({
   mobileHash: { type: String, required: true, select: false },
   mobileLast4: { type: String, required: true },
   clientName: { type: String, required: true, trim: true, maxlength: 140 },
-  projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Property", required: true },
-  projectTitle: { type: String, required: true, trim: true, maxlength: 180 },
+  projectId: { type: mongoose.Schema.Types.ObjectId, ref: "Property", default: null },
+  projectTitle: { type: String, default: "", trim: true, maxlength: 180 },
   outcome: { type: String, enum: ["rejected_active_claim"], default: "rejected_active_claim" },
   attemptedAt: { type: Date, required: true, default: Date.now, index: true },
 }, { timestamps: true });
