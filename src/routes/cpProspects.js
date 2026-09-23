@@ -45,6 +45,13 @@ function normalizedProspectType(value) {
   return PROSPECT_TYPES.has(value) ? value : "channel_partner";
 }
 
+function serialFromSearch(value) {
+  const match = clean(value, 120).match(/^\s*(?:#|no\.?\s*)?(\d{1,6})\s*$/i);
+  if (!match) return null;
+  const serial = Number(match[1]);
+  return Number.isSafeInteger(serial) && serial >= 1 ? serial : null;
+}
+
 function mobileHashFor(mobile, prospectType) {
   const purpose = normalizedProspectType(prospectType) === "broker" ? "broker-prospect-mobile" : "cp-prospect-mobile";
   return hashLookup(mobile, purpose);
@@ -209,10 +216,13 @@ function prospectFilter(query, employeeId) {
   if (query.propertyType && PROPERTY_TYPES.has(query.propertyType)) filter["business.preferredSegments"] = query.propertyType;
   if (query.due === "overdue") filter.nextFollowUpAt = { $lt: new Date() };
   if (query.search) {
-    const search = new RegExp(escapeRegex(clean(query.search, 120)), "i");
+    const searchText = clean(query.search, 120);
+    const search = new RegExp(escapeRegex(searchText), "i");
+    const serial = serialFromSearch(searchText);
     filter.$or = [
       { "company.name": search }, { "contact.name": search }, { "contact.mobile": search }, { "contact.whatsappMobile": search },
       { "contact.email": search }, { "address.city": search }, { "business.areasOfOperation": search },
+      ...(serial === null ? [] : [{ sourceRowNumber: serial + 1 }]),
     ];
   }
   return filter;

@@ -63,6 +63,12 @@ describe("Imported CP verification", () => {
     expect(JSON.stringify(prospect)).not.toContain("ABCDE1234F");
     expect(JSON.stringify(prospect)).not.toContain("123456789012");
 
+    for (const search of ["1", "#1", "No. 1"]) {
+      const serialSearch = await request(app).get(`/api/cp-prospects/mine/prospects?search=${encodeURIComponent(search)}`).set("Authorization", `Bearer ${staffToken}`);
+      expect(serialSearch.status).toBe(200);
+      expect(serialSearch.body.prospects.map((item) => item.id)).toEqual([prospect.id]);
+    }
+
     const call = await request(app).post(`/api/cp-prospects/mine/prospects/${prospect.id}/call-start`).set("Authorization", `Bearer ${staffToken}`);
     expect(call.status).toBe(201);
     expect(call.body.dialNumber).toBe("9876543210");
