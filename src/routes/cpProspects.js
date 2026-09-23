@@ -414,7 +414,7 @@ router.get("/admin/prospects", auth, adminOnly, async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
     const [prospects, total] = await Promise.all([
-      populateProspects(CPProspect.find(filter).sort({ nextFollowUpAt: 1, createdAt: 1 }).skip((page - 1) * limit).limit(limit)),
+      populateProspects(CPProspect.find(filter).sort({ importBatchId: 1, sourceRowNumber: 1 }).skip((page - 1) * limit).limit(limit)),
       CPProspect.countDocuments(filter),
     ]);
     return res.json({ prospects: prospects.map(presentProspect), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
@@ -511,7 +511,7 @@ router.get("/mine/prospects", crmStaffAuth, requireCrmPermission("cp_crm.view"),
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
     const [prospects, total, metrics] = await Promise.all([
-      populateProspects(CPProspect.find(filter).sort({ nextFollowUpAt: 1, createdAt: 1 }).skip((page - 1) * limit).limit(limit)),
+      populateProspects(CPProspect.find(filter).sort({ importBatchId: 1, sourceRowNumber: 1 }).skip((page - 1) * limit).limit(limit)),
       CPProspect.countDocuments(filter), prospectMetrics(metricFilter),
     ]);
     return res.json({ prospects: prospects.map(presentProspect), metrics, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
