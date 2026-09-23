@@ -31,7 +31,12 @@ function normalizeOrigin(value) {
 }
 
 function getAllowedOrigins(frontendUrlValue) {
-  const defaults = ["http://localhost:5173", "http://localhost:3000"];
+  const defaults = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "https://cleartitleone.com",
+    "https://www.cleartitleone.com",
+  ];
   const configuredOrigins = frontendUrlValue
     ? frontendUrlValue.split(",").map(normalizeOrigin).filter(Boolean)
     : [];
