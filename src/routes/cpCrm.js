@@ -16,13 +16,21 @@ const CPCRMTask = require("../models/CPCRMTask");
 const CPCRMTaskItem = require("../models/CPCRMTaskItem");
 const CPCRMMessageTemplate = require("../models/CPCRMMessageTemplate");
 const CPProspect = require("../models/CPProspect");
+const CPProspectInteraction = require("../models/CPProspectInteraction");
 const CPProspectFollowUp = require("../models/CPProspectFollowUp");
 
 const router = express.Router();
 const TEMPLATE_AUDIENCES = new Set(["all", "registered_cp", "imported_cp", "broker"]);
 const clean = (value, max = 2000) => String(value ?? "").trim().slice(0, max);
 const escapeRegex = (value) => String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const employeeLoginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: process.env.NODE_ENV === "test" ? 1000 : 8, message: { error: "Too many employee login attempts. Try again later." } });
+const employeeLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: process.env.NODE_ENV === "test" ? 1000 : 50,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many failed employee login attempts. Try again in 15 minutes." },
+});
 const CALL_OUTCOMES = new Set(["no_answer", "busy", "connected", "callback_requested", "interested", "has_clients", "needs_project_details", "not_interested", "wrong_number", "do_not_contact", "other"]);
 const WHATSAPP_OUTCOMES = new Set(["sent", "not_sent", "failed"]);
 const MOBILE = /^[6-9][0-9]{9}$/;
@@ -132,7 +140,8 @@ async function profileDetail(profile) {
 async function staffMetrics(staffId) {
   const now = new Date();
   const { start, end } = indiaDayBounds(now);
-  const [assigned, contacted, callResults, callbacksScheduled, callbacksCompleted, callbacksDueToday, callbacksOverdue, whatsappSent] = await Promise.all([
+  const [registeredAssigned, registeredContacted, registeredCallResults, registeredCallbacksScheduled, registeredCallbacksCompleted, registeredCallbacksDueToday, registeredCallbacksOverdue, registeredWhatsappSent,
+    importedAssigned, importedContacted, importedCallResults, importedCallbacksScheduled, importedCallbacksCompleted, importedCallbacksDueToday, importedCallbacksOverdue, importedWhatsappSent, importedStatuses] = await Promise.all([
     CPCRMProfile.countDocuments({ assignedEmployeeId: staffId }),
     CPCRMProfile.countDocuments({ assignedEmployeeId: staffId, lastContactedAt: { $ne: null } }),
     CPCRMInteraction.countDocuments({ employeeId: staffId, action: "call_result" }),
@@ -141,8 +150,32 @@ async function staffMetrics(staffId) {
     CPCRMFollowUp.countDocuments({ employeeId: staffId, status: "pending", scheduledAt: { $gte: start, $lte: end } }),
     CPCRMFollowUp.countDocuments({ employeeId: staffId, status: "pending", scheduledAt: { $lt: now } }),
     CPCRMInteraction.countDocuments({ employeeId: staffId, action: "whatsapp_result", outcome: "sent" }),
+    CPProspect.countDocuments({ assignedEmployeeId: staffId }),
+    CPProspect.countDocuments({ assignedEmployeeId: staffId, lastContactedAt: { $ne: null } }),
+    CPProspectInteraction.countDocuments({ employeeId: staffId, action: { $in: ["verification_result", "broker_call_result"] } }),
+    CPProspectFollowUp.countDocuments({ employeeId: staffId }),
+    CPProspectFollowUp.countDocuments({ employeeId: staffId, status: "completed" }),
+    CPProspectFollowUp.countDocuments({ employeeId: staffId, status: "pending", scheduledAt: { $gte: start, $lte: end } }),
+    CPProspectFollowUp.countDocuments({ employeeId: staffId, status: "pending", scheduledAt: { $lt: now } }),
+    CPProspectInteraction.countDocuments({ employeeId: staffId, action: "whatsapp_result", outcome: "sent" }),
+    CPProspect.aggregate([{ $match: { assignedEmployeeId: staffId } }, { $group: { _id: "$verificationStatus", count: { $sum: 1 } } }]),
   ]);
-  return { assigned, pending: Math.max(assigned - contacted, 0), contacted, callResults, callbacksScheduled, callbacksCompleted, callbacksDueToday, callbacksOverdue, whatsappSent };
+  const assigned = registeredAssigned + importedAssigned;
+  const contacted = registeredContacted + importedContacted;
+  const statusCounts = Object.fromEntries(importedStatuses.map((item) => [item._id, item.count]));
+  return {
+    assigned, pending: Math.max(assigned - contacted, 0), contacted,
+    callResults: registeredCallResults + importedCallResults,
+    callbacksScheduled: registeredCallbacksScheduled + importedCallbacksScheduled,
+    callbacksCompleted: registeredCallbacksCompleted + importedCallbacksCompleted,
+    callbacksDueToday: registeredCallbacksDueToday + importedCallbacksDueToday,
+    callbacksOverdue: registeredCallbacksOverdue + importedCallbacksOverdue,
+    whatsappSent: registeredWhatsappSent + importedWhatsappSent,
+    registeredAssigned, importedAssigned,
+    active: statusCounts.active || 0,
+    inactive: ["inactive", "wrong_number", "not_channel_partner", "duplicate", "do_not_contact"].reduce((sum, status) => sum + (statusCounts[status] || 0), 0),
+    callbackRequested: statusCounts.callback_requested || 0,
+  };
 }
 
 router.post("/auth/login", employeeLoginLimiter, [body("employeeId").trim().isLength({ min: 3, max: 40 }), body("password").isLength({ min: 8, max: 128 })], async (req, res) => {
@@ -180,16 +213,26 @@ router.get("/admin/employees/:id/activity", auth, adminOnly, async (req, res) =>
   try {
     const employee = await CRMStaffAccount.findById(req.params.id).lean();
     if (!employee || employee.isDeleted) return res.status(404).json({ error: "Employee not found." });
-    const [metrics, interactions, followUps, tasks] = await Promise.all([
+    const [metrics, registeredInteractions, importedInteractions, registeredFollowUps, importedFollowUps, tasks] = await Promise.all([
       staffMetrics(employee._id),
-      CPCRMInteraction.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(100).populate("partnerId", "applicationNumber company.name contact.name contact.mobile").lean(),
-      CPCRMFollowUp.find({ employeeId: employee._id }).sort({ scheduledAt: -1 }).limit(100).populate("partnerId", "applicationNumber company.name contact.name contact.mobile").lean(),
+      CPCRMInteraction.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(500).populate("partnerId", "applicationNumber company.name contact.name contact.mobile").lean(),
+      CPProspectInteraction.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(500).populate("prospectId", "company.name contact.name contact.mobile prospectType").lean(),
+      CPCRMFollowUp.find({ employeeId: employee._id }).sort({ scheduledAt: -1 }).limit(500).populate("partnerId", "applicationNumber company.name contact.name contact.mobile").lean(),
+      CPProspectFollowUp.find({ employeeId: employee._id }).sort({ scheduledAt: -1 }).limit(500).populate("prospectId", "company.name contact.name contact.mobile prospectType").lean(),
       CPCRMTask.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(50).lean(),
     ]);
+    const interactions = [
+      ...registeredInteractions.map((item) => ({ ...item, id: String(item._id), source: "registered", partner: item.partnerId ? { id: String(item.partnerId._id), applicationNumber: item.partnerId.applicationNumber, companyName: item.partnerId.company?.name || "", contactName: item.partnerId.contact?.name || "", mobile: item.partnerId.contact?.mobile || "" } : null })),
+      ...importedInteractions.map((item) => ({ ...item, id: String(item._id), source: item.prospectId?.prospectType === "broker" ? "broker" : "imported", partner: item.prospectId ? { id: String(item.prospectId._id), applicationNumber: "", companyName: item.prospectId.company?.name || "", contactName: item.prospectId.contact?.name || "", mobile: item.prospectId.contact?.mobile || "" } : null })),
+    ].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt)).slice(0, 500);
+    const followUps = [
+      ...registeredFollowUps.map((item) => ({ ...item, id: String(item._id), source: "registered", partner: item.partnerId ? { id: String(item.partnerId._id), companyName: item.partnerId.company?.name || "" } : null })),
+      ...importedFollowUps.map((item) => ({ ...item, id: String(item._id), source: item.prospectId?.prospectType === "broker" ? "broker" : "imported", partner: item.prospectId ? { id: String(item.prospectId._id), companyName: item.prospectId.company?.name || item.prospectId.contact?.name || "" } : null })),
+    ].sort((left, right) => new Date(right.scheduledAt) - new Date(left.scheduledAt)).slice(0, 500);
     return res.json({
       employee: publicStaff(employee), metrics,
-      interactions: interactions.map((item) => ({ ...item, id: String(item._id), partner: item.partnerId ? { id: String(item.partnerId._id), applicationNumber: item.partnerId.applicationNumber, companyName: item.partnerId.company?.name || "", contactName: item.partnerId.contact?.name || "", mobile: item.partnerId.contact?.mobile || "" } : null })),
-      followUps: followUps.map((item) => ({ ...item, id: String(item._id), partner: item.partnerId ? { id: String(item.partnerId._id), applicationNumber: item.partnerId.applicationNumber, companyName: item.partnerId.company?.name || "", contactName: item.partnerId.contact?.name || "", mobile: item.partnerId.contact?.mobile || "" } : null })),
+      interactions,
+      followUps,
       tasks: tasks.map((item) => ({ ...item, id: String(item._id) })),
     });
   } catch (error) {
