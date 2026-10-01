@@ -115,7 +115,7 @@ function presentProspect(prospect) {
     : null;
   return {
     id: String(prospect._id), prospectType: normalizedProspectType(prospect.prospectType), importBatchId: String(prospect.importBatchId?._id || prospect.importBatchId), batch,
-    sourceRowNumber: prospect.sourceRowNumber, existingPartner,
+    sourceRowNumber: prospect.sourceSerialNumber ? prospect.sourceSerialNumber + 1 : prospect.sourceRowNumber, sourceGroup: prospect.sourceGroup || "", sourceSerialNumber: prospect.sourceSerialNumber || 0, allocationSequence: prospect.allocationSequence || 0, existingPartner,
     assignedEmployeeId: prospect.assignedEmployeeId ? String(prospect.assignedEmployeeId._id || prospect.assignedEmployeeId) : "",
     assignedEmployee: employee, assignedAt: prospect.assignedAt,
     verificationStatus: prospect.verificationStatus, verifiedAt: prospect.verifiedAt,
@@ -160,13 +160,15 @@ function sanitizeOriginal(row) {
 function prospectFromRow(row, batchId, sourceRowNumber, existingPartnerId = null, prospectType = "channel_partner") {
   const mobile = normalizePhone(row.mobile);
   const alternateMobile = normalizePhone(row.alternateMobile);
+  const partnerType = clean(row.partnerType, 20).toLowerCase();
   const panNumber = upper(row.panNumber, 10);
   const accountNumber = digits(row.accountNumber);
   const yearEstablished = Number(row.yearEstablished);
   const signedDate = row.signedDate ? new Date(row.signedDate) : null;
   const prospect = {
-    prospectType: normalizedProspectType(prospectType), importBatchId: batchId, sourceRowNumber, originalData: sanitizeOriginal(row), existingPartnerId,
-    partnerType: ["company", "individual"].includes(clean(row.partnerType, 20).toLowerCase()) ? clean(row.partnerType, 20).toLowerCase() : "",
+    prospectType: normalizedProspectType(prospectType), importBatchId: batchId, sourceRowNumber,
+    sourceGroup: clean(row.sourceGroup, 100), sourceSerialNumber: Math.max(Number(row.sourceSerialNumber) || 0, 0), allocationSequence: Math.max(Number(row.allocationSequence) || 0, 0), originalData: sanitizeOriginal(row), existingPartnerId,
+    partnerType: partnerType.includes("company") || partnerType.includes("firm") ? "company" : partnerType.includes("individual") ? "individual" : "",
     company: {
       name: clean(row.companyName || row.contactName, 160), businessType: clean(row.businessType, 40).toLowerCase(),
       ...(Number.isInteger(yearEstablished) && yearEstablished >= 1900 && yearEstablished <= new Date().getFullYear() ? { yearEstablished } : {}),
@@ -207,6 +209,7 @@ function prospectFilter(query, employeeId) {
   const filter = employeeId ? { assignedEmployeeId: employeeId } : {};
   if (query.prospectType && PROSPECT_TYPES.has(query.prospectType)) filter.prospectType = query.prospectType;
   if (query.batchId) filter.importBatchId = query.batchId;
+  if (query.sourceGroup) filter.sourceGroup = new RegExp(`^${escapeRegex(clean(query.sourceGroup, 100))}$`, "i");
   if (query.employeeId === "unassigned") filter.assignedEmployeeId = null;
   else if (!employeeId && query.employeeId) filter.assignedEmployeeId = query.employeeId;
   if (query.status && STATUSES.has(query.status)) filter.verificationStatus = query.status;
@@ -222,7 +225,7 @@ function prospectFilter(query, employeeId) {
     filter.$or = [
       { "company.name": search }, { "contact.name": search }, { "contact.mobile": search }, { "contact.whatsappMobile": search },
       { "contact.email": search }, { "address.city": search }, { "business.areasOfOperation": search },
-      ...(serial === null ? [] : [{ sourceRowNumber: serial + 1 }]),
+      ...(serial === null ? [] : [{ sourceRowNumber: serial + 1 }, { sourceSerialNumber: serial }]),
     ];
   }
   return filter;
@@ -314,15 +317,21 @@ router.post("/admin/imports/:id/rows", auth, adminOnly, async (req, res) => {
       CPProspect.find({ prospectType: batch.prospectType, "contact.mobileHash": { $in: phones.map((phone) => mobileHashFor(phone, batch.prospectType)) } }).select("+contact.mobileHash").lean(),
       ChannelPartner.find({ "contact.mobile": { $in: phones } }).select("contact.mobile applicationNumber").lean(),
     ]);
-    const prospectHashes = new Set(existingProspects.map((item) => item.contact.mobileHash));
+    const existingByHash = new Map(existingProspects.map((item) => [item.contact.mobileHash, item]));
+    const prospectHashes = new Set(existingByHash.keys());
     const registeredByPhone = new Map(registeredPartners.map((item) => [item.contact.mobile, item._id]));
     const seenInChunk = new Set();
-    const insertRows = [];
+    const insertRows = []; const metadataUpdates = [];
     let duplicates = 0;
     let matchedRegistered = 0;
     for (const item of validRows) {
       const mobileHash = mobileHashFor(item.mobile, batch.prospectType);
-      if (prospectHashes.has(mobileHash) || seenInChunk.has(mobileHash)) { duplicates += 1; continue; }
+      if (prospectHashes.has(mobileHash) || seenInChunk.has(mobileHash)) {
+        duplicates += 1;
+        const existing = existingByHash.get(mobileHash);
+        if (existing && (item.row.sourceGroup || item.row.sourceSerialNumber)) metadataUpdates.push({ updateOne: { filter: { _id: existing._id }, update: { $set: { sourceGroup: clean(item.row.sourceGroup, 100), sourceSerialNumber: Math.max(Number(item.row.sourceSerialNumber) || 0, 0), allocationSequence: Math.max(Number(item.row.allocationSequence) || 0, 0) } } } });
+        continue;
+      }
       seenInChunk.add(mobileHash);
       const existingPartnerId = registeredByPhone.get(item.mobile) || null;
       if (existingPartnerId) matchedRegistered += 1;
@@ -351,6 +360,7 @@ router.post("/admin/imports/:id/rows", auth, adminOnly, async (req, res) => {
         } else throw error;
       }
     }
+    if (metadataUpdates.length) await CPProspect.bulkWrite(metadataUpdates, { ordered: false });
     batch.processedRows += rows.length;
     batch.importedCount += imported;
     batch.duplicateCount += duplicates;
@@ -424,7 +434,7 @@ router.get("/admin/prospects", auth, adminOnly, async (req, res) => {
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
     const [prospects, total] = await Promise.all([
-      populateProspects(CPProspect.find(filter).sort({ importBatchId: 1, sourceRowNumber: 1 }).skip((page - 1) * limit).limit(limit)),
+      populateProspects(CPProspect.find(filter).sort({ allocationSequence: 1, importBatchId: 1, sourceRowNumber: 1 }).skip((page - 1) * limit).limit(limit)),
       CPProspect.countDocuments(filter),
     ]);
     return res.json({ prospects: prospects.map(presentProspect), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
@@ -480,10 +490,14 @@ router.patch("/admin/prospects/allocate", auth, adminOnly, async (req, res) => {
     const filter = hasSelection
       ? { _id: { $in: prospectIds }, prospectType: normalizedProspectType(req.body.filters?.prospectType) }
       : prospectFilter(req.body.filters || {});
-    if (!hasSelection && hasRange) filter.sourceRowNumber = { $gte: rangeFrom + 1, $lte: rangeTo + 1 };
+    if (!hasSelection && hasRange) {
+      filter[req.body.filters?.sourceGroup ? "sourceSerialNumber" : "sourceRowNumber"] = req.body.filters?.sourceGroup
+        ? { $gte: rangeFrom, $lte: rangeTo }
+        : { $gte: rangeFrom + 1, $lte: rangeTo + 1 };
+    }
     const selectedCount = hasSelection || hasRange ? await CPProspect.countDocuments(filter) : count;
     const unassignedFilter = { ...filter, assignedEmployeeId: null };
-    const query = CPProspect.find(unassignedFilter).sort({ sourceRowNumber: 1, createdAt: 1 }).select("_id");
+    const query = CPProspect.find(unassignedFilter).sort({ allocationSequence: 1, sourceGroup: 1, sourceSerialNumber: 1, sourceRowNumber: 1, createdAt: 1 }).select("_id");
     if (!hasSelection && !hasRange) query.limit(count);
     const prospects = await query.lean();
     if (!prospects.length) return res.status(409).json({ error: "No unassigned contacts match these filters." });
@@ -521,7 +535,7 @@ router.get("/mine/prospects", crmStaffAuth, requireCrmPermission("cp_crm.view"),
     const page = Math.max(Number(req.query.page) || 1, 1);
     const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200);
     const [prospects, total, metrics] = await Promise.all([
-      populateProspects(CPProspect.find(filter).sort({ importBatchId: 1, sourceRowNumber: 1 }).skip((page - 1) * limit).limit(limit)),
+      populateProspects(CPProspect.find(filter).sort({ allocationSequence: 1, importBatchId: 1, sourceRowNumber: 1 }).skip((page - 1) * limit).limit(limit)),
       CPProspect.countDocuments(filter), prospectMetrics(metricFilter),
     ]);
     return res.json({ prospects: prospects.map(presentProspect), metrics, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });

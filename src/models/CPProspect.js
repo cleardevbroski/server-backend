@@ -12,6 +12,9 @@ const cpProspectSchema = new mongoose.Schema({
   prospectType: { type: String, enum: ["channel_partner", "broker"], default: "channel_partner", index: true },
   importBatchId: { type: mongoose.Schema.Types.ObjectId, ref: "CPProspectImportBatch", required: true, index: true },
   sourceRowNumber: { type: Number, required: true, min: 2 },
+  sourceGroup: { type: String, default: "", trim: true, maxlength: 100, index: true },
+  sourceSerialNumber: { type: Number, default: 0, min: 0, index: true },
+  allocationSequence: { type: Number, default: 0, min: 0, index: true },
   originalData: { type: mongoose.Schema.Types.Mixed, default: {}, select: false },
   existingPartnerId: { type: mongoose.Schema.Types.ObjectId, ref: "ChannelPartner", default: null, index: true },
   assignedEmployeeId: { type: mongoose.Schema.Types.ObjectId, ref: "CRMStaffAccount", default: null, index: true },
@@ -85,6 +88,7 @@ cpProspectSchema.index({ assignedEmployeeId: 1, verificationStatus: 1, nextFollo
 cpProspectSchema.index({ "business.areasOfOperation": 1 });
 cpProspectSchema.index({ "business.preferredSegments": 1 });
 cpProspectSchema.index({ importBatchId: 1, sourceRowNumber: 1 }, { unique: true });
+cpProspectSchema.index({ prospectType: 1, sourceGroup: 1, sourceSerialNumber: 1 });
 
 const CPProspect = mongoose.model("CPProspect", cpProspectSchema);
 CPProspect.VERIFICATION_STATUSES = VERIFICATION_STATUSES;
