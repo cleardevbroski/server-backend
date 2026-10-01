@@ -9,6 +9,7 @@
     "test": "jest --runInBand",
     "db:sync-indexes": "node scripts/sync-indexes.js",
     "db:backfill-channel-partner-codes": "node scripts/backfill-channel-partner-codes.js",
+    "db:backfill-cp-source-groups": "node scripts/backfill-cp-source-groups.js",
     "db:migrate-channel-partner-clients": "node scripts/migrate-channel-partner-client-lifecycle.js",
     "db:migrate-property-rera": "node scripts/migrate-property-rera.js",
     "db:migrate-pending-project-areas": "node scripts/migrate-pending-project-areas.js",
