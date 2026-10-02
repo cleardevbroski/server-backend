@@ -18,6 +18,9 @@ const CPCRMMessageTemplate = require("../models/CPCRMMessageTemplate");
 const CPProspect = require("../models/CPProspect");
 const CPProspectInteraction = require("../models/CPProspectInteraction");
 const CPProspectFollowUp = require("../models/CPProspectFollowUp");
+const CPEmployeeLead = require("../models/CPEmployeeLead");
+const CPEmployeeLeadActivity = require("../models/CPEmployeeLeadActivity");
+const { hashLookup } = require("../utils/channelPartnerCrypto");
 
 const router = express.Router();
 const TEMPLATE_AUDIENCES = new Set(["all", "registered_cp", "imported_cp", "broker"]);
@@ -36,12 +39,97 @@ const WHATSAPP_OUTCOMES = new Set(["sent", "not_sent", "failed"]);
 const MOBILE = /^[6-9][0-9]{9}$/;
 const DEFAULT_PERMISSIONS = ["cp_crm.view", "cp_crm.contact"];
 const INDIA_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const LEAD_STATUSES = new Set(CPEmployeeLead.STATUSES);
+const normalizeMobile = (value) => String(value || "").replace(/\D/g, "").replace(/^91(?=\d{10}$)/, "");
 
 function indiaDayBounds(now = new Date()) {
   const indiaNow = new Date(now.getTime() + INDIA_OFFSET_MS);
   const indiaMidnightAsUtc = Date.UTC(indiaNow.getUTCFullYear(), indiaNow.getUTCMonth(), indiaNow.getUTCDate());
   const start = new Date(indiaMidnightAsUtc - INDIA_OFFSET_MS);
   return { start, end: new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1) };
+}
+
+function indiaRange(fromValue, toValue) {
+  const parse = (value, end) => {
+    const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return null;
+    const utc = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return new Date(utc - INDIA_OFFSET_MS + (end ? 24 * 60 * 60 * 1000 - 1 : 0));
+  };
+  const today = indiaDayBounds();
+  const start = parse(fromValue, false) || today.start;
+  const end = parse(toValue || fromValue, true) || today.end;
+  if (end < start) throw new Error("End date must be on or after the start date.");
+  return { start, end };
+}
+
+async function employeeReport(staffId, range) {
+  const createdAt = { $gte: range.start, $lte: range.end };
+  const [registered, imported, registeredFollowUps, importedFollowUps, leadActivities] = await Promise.all([
+    CPCRMInteraction.find({ employeeId: staffId, createdAt }).sort({ createdAt: -1 }).limit(1000).populate("partnerId", "company.name contact.name contact.mobile").lean(),
+    CPProspectInteraction.find({ employeeId: staffId, createdAt }).sort({ createdAt: -1 }).limit(1000).populate("prospectId", "company.name contact.name contact.mobile prospectType").lean(),
+    CPCRMFollowUp.find({ employeeId: staffId, createdAt }).lean(),
+    CPProspectFollowUp.find({ employeeId: staffId, createdAt }).lean(),
+    CPEmployeeLeadActivity.find({ employeeId: staffId, createdAt }).sort({ createdAt: -1 }).limit(1000).populate("leadId", "name mobile").lean(),
+  ]);
+  const activities = [
+    ...registered.map((item) => ({ id: String(item._id), source: "registered", action: item.action, outcome: item.outcome, note: item.note, createdAt: item.createdAt, contact: item.partnerId ? item.partnerId.company?.name || item.partnerId.contact?.name || "Registered CP" : "Registered CP" })),
+    ...imported.map((item) => ({ id: String(item._id), source: item.prospectId?.prospectType === "broker" ? "broker" : "imported", action: item.action, outcome: item.outcome, note: item.note, createdAt: item.createdAt, contact: item.prospectId ? item.prospectId.company?.name || item.prospectId.contact?.name || "Imported CP" : "Imported CP" })),
+    ...leadActivities.map((item) => ({ id: String(item._id), source: "lead", action: item.action, outcome: item.status, note: item.note, createdAt: item.createdAt, contact: item.leadId?.name || "Customer lead" })),
+  ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const calls = activities.filter((item) => ["call_result", "verification_result", "broker_call_result"].includes(item.action));
+  const activeOutcomes = new Set(["connected", "interested", "has_clients", "needs_project_details", "active"]);
+  const inactiveOutcomes = new Set(["not_interested", "wrong_number", "do_not_contact", "inactive", "not_channel_partner", "duplicate"]);
+  const summary = {
+    totalActivities: activities.length,
+    calls: calls.length,
+    active: calls.filter((item) => activeOutcomes.has(item.outcome)).length,
+    inactive: calls.filter((item) => inactiveOutcomes.has(item.outcome)).length,
+    callbacksRequested: calls.filter((item) => item.outcome === "callback_requested").length,
+    noAnswer: calls.filter((item) => item.outcome === "no_answer").length,
+    busy: calls.filter((item) => item.outcome === "busy").length,
+    wrongNumber: calls.filter((item) => item.outcome === "wrong_number").length,
+    whatsappShared: activities.filter((item) => item.action === "whatsapp_result" && item.outcome === "sent").length,
+    whatsappOpened: activities.filter((item) => item.action === "whatsapp_opened").length,
+    notes: activities.filter((item) => item.action === "note").length,
+    profileUpdates: activities.filter((item) => ["profile_updated", "whatsapp_number_updated"].includes(item.action)).length,
+    callbacksScheduled: registeredFollowUps.length + importedFollowUps.length,
+    callbacksCompleted: [...registeredFollowUps, ...importedFollowUps].filter((item) => item.status === "completed").length,
+    leadsCreated: leadActivities.filter((item) => item.action === "lead_created").length,
+    leadsContacted: leadActivities.filter((item) => item.action === "call_result").length,
+    leadsInterested: leadActivities.filter((item) => item.status === "interested").length,
+    leadsInactive: leadActivities.filter((item) => ["not_interested", "invalid_number"].includes(item.status)).length,
+    visitsScheduled: leadActivities.filter((item) => item.action === "site_visit_scheduled").length,
+    visitsCompleted: leadActivities.filter((item) => item.action === "site_visit_completed").length,
+    leadWhatsAppShared: leadActivities.filter((item) => item.action === "whatsapp_shared").length,
+  };
+  return { range: { from: range.start, to: range.end }, summary, activities: activities.slice(0, 1000) };
+}
+
+async function employeeLeadReport(staffId, range) {
+  const createdAt = { $gte: range.start, $lte: range.end };
+  const [activities, funnelRows, dueToday, overdue] = await Promise.all([
+    CPEmployeeLeadActivity.find({ employeeId: staffId, createdAt }).sort({ createdAt: -1 }).limit(2000).populate("leadId", "serialNumber name mobile projectInterest status city area").lean(),
+    CPEmployeeLead.aggregate([{ $match: { assignedEmployeeId: staffId } }, { $group: { _id: "$status", count: { $sum: 1 } } }]),
+    CPEmployeeLead.countDocuments({ assignedEmployeeId: staffId, nextFollowUpAt: { $gte: range.start, $lte: range.end } }),
+    CPEmployeeLead.countDocuments({ assignedEmployeeId: staffId, nextFollowUpAt: { $lt: new Date() }, status: { $nin: ["booked", "not_interested", "invalid_number"] } }),
+  ]);
+  const count = (action) => activities.filter((item) => item.action === action).length;
+  const funnel = Object.fromEntries([...LEAD_STATUSES].map((status) => [status, 0]));
+  funnelRows.forEach((item) => { funnel[item._id] = item.count; });
+  const detailedActivities = activities.map((item) => ({
+    id: String(item._id), action: item.action, status: item.status, note: item.note, scheduledAt: item.scheduledAt, createdAt: item.createdAt,
+    lead: item.leadId ? { id: String(item.leadId._id), serialNumber: item.leadId.serialNumber, name: item.leadId.name, mobile: item.leadId.mobile, projectInterest: item.leadId.projectInterest, currentStatus: item.leadId.status, city: item.leadId.city, area: item.leadId.area } : null,
+  }));
+  return {
+    range: { from: range.start, to: range.end }, funnel,
+    summary: {
+      activities: activities.length, leadsCreated: count("lead_created"), calls: count("call_result"), whatsappShared: count("whatsapp_shared"), callbacksScheduled: count("callback_scheduled"), callbacksDue: dueToday, callbacksOverdue: overdue,
+      visitsScheduled: count("site_visit_scheduled"), visitsCompleted: count("site_visit_completed"), notes: count("note"), interested: activities.filter((item) => item.status === "interested").length,
+      booked: activities.filter((item) => item.status === "booked").length, inactive: activities.filter((item) => ["not_interested", "invalid_number"].includes(item.status)).length,
+    },
+    activities: detailedActivities,
+  };
 }
 
 function validationError(req, res) {
@@ -58,6 +146,17 @@ function publicStaff(staff) {
     id: String(staff._id), employeeId: staff.employeeId, name: staff.name, phone: staff.phone,
     email: staff.email, role: staff.role, permissions: staff.permissions || [], isActive: staff.isActive,
     lastLoginAt: staff.lastLoginAt, createdAt: staff.createdAt, updatedAt: staff.updatedAt,
+  };
+}
+
+function presentLead(lead) {
+  return {
+    id: String(lead._id), serialNumber: lead.serialNumber, name: lead.name, mobile: lead.mobile,
+    alternateMobile: lead.alternateMobile, whatsappMobile: lead.whatsappMobile, email: lead.email,
+    source: lead.source, projectInterest: lead.projectInterest, propertyType: lead.propertyType,
+    budget: lead.budget, city: lead.city, area: lead.area, status: lead.status, feedback: lead.feedback,
+    nextFollowUpAt: lead.nextFollowUpAt, visitAt: lead.visitAt, lastActivityAt: lead.lastActivityAt,
+    createdAt: lead.createdAt, updatedAt: lead.updatedAt,
   };
 }
 
@@ -127,7 +226,7 @@ async function profileDetail(profile) {
     CPCRMInteraction.find({ partnerId: profile.partnerId._id || profile.partnerId }).sort({ createdAt: -1 }).limit(100).populate("employeeId", "employeeId name").lean(),
     CPCRMFollowUp.find({ partnerId: profile.partnerId._id || profile.partnerId }).sort({ scheduledAt: -1 }).limit(50).populate("employeeId", "employeeId name").lean(),
     ChannelPartnerClient.countDocuments({ partnerId: profile.partnerId._id || profile.partnerId }),
-    CPCRMMessageTemplate.find({ isActive: true, $or: [{ audience: { $in: ["all", "registered_cp"] } }, { audience: { $exists: false } }] }).sort({ kind: 1, createdAt: -1 }).lean(),
+    CPCRMMessageTemplate.find({ isActive: true, isDeleted: { $ne: true }, $or: [{ audience: { $in: ["all", "registered_cp"] } }, { audience: { $exists: false } }] }).sort({ kind: 1, createdAt: -1 }).lean(),
   ]);
   return {
     profile: presentedProfile(profile), clientsCount,
@@ -141,7 +240,7 @@ async function staffMetrics(staffId) {
   const now = new Date();
   const { start, end } = indiaDayBounds(now);
   const [registeredAssigned, registeredContacted, registeredCallResults, registeredCallbacksScheduled, registeredCallbacksCompleted, registeredCallbacksDueToday, registeredCallbacksOverdue, registeredWhatsappSent,
-    importedAssigned, importedContacted, importedCallResults, importedCallbacksScheduled, importedCallbacksCompleted, importedCallbacksDueToday, importedCallbacksOverdue, importedWhatsappSent, importedStatuses] = await Promise.all([
+    importedAssigned, importedContacted, importedCallResults, importedCallbacksScheduled, importedCallbacksCompleted, importedCallbacksDueToday, importedCallbacksOverdue, importedWhatsappSent, importedStatuses, leadCount, leadContacted, leadCallbacksDueToday, leadCallbacksOverdue, leadWhatsAppShared] = await Promise.all([
     CPCRMProfile.countDocuments({ assignedEmployeeId: staffId }),
     CPCRMProfile.countDocuments({ assignedEmployeeId: staffId, lastContactedAt: { $ne: null } }),
     CPCRMInteraction.countDocuments({ employeeId: staffId, action: "call_result" }),
@@ -159,6 +258,11 @@ async function staffMetrics(staffId) {
     CPProspectFollowUp.countDocuments({ employeeId: staffId, status: "pending", scheduledAt: { $lt: now } }),
     CPProspectInteraction.countDocuments({ employeeId: staffId, action: "whatsapp_result", outcome: "sent" }),
     CPProspect.aggregate([{ $match: { assignedEmployeeId: staffId } }, { $group: { _id: "$verificationStatus", count: { $sum: 1 } } }]),
+    CPEmployeeLead.countDocuments({ assignedEmployeeId: staffId }),
+    CPEmployeeLead.countDocuments({ assignedEmployeeId: staffId, status: { $ne: "new" } }),
+    CPEmployeeLead.countDocuments({ assignedEmployeeId: staffId, nextFollowUpAt: { $gte: start, $lte: end } }),
+    CPEmployeeLead.countDocuments({ assignedEmployeeId: staffId, nextFollowUpAt: { $lt: now } }),
+    CPEmployeeLeadActivity.countDocuments({ employeeId: staffId, action: "whatsapp_shared" }),
   ]);
   const assigned = registeredAssigned + importedAssigned;
   const contacted = registeredContacted + importedContacted;
@@ -168,13 +272,15 @@ async function staffMetrics(staffId) {
     callResults: registeredCallResults + importedCallResults,
     callbacksScheduled: registeredCallbacksScheduled + importedCallbacksScheduled,
     callbacksCompleted: registeredCallbacksCompleted + importedCallbacksCompleted,
-    callbacksDueToday: registeredCallbacksDueToday + importedCallbacksDueToday,
-    callbacksOverdue: registeredCallbacksOverdue + importedCallbacksOverdue,
-    whatsappSent: registeredWhatsappSent + importedWhatsappSent,
+    callbacksDueToday: registeredCallbacksDueToday + importedCallbacksDueToday + leadCallbacksDueToday,
+    callbacksOverdue: registeredCallbacksOverdue + importedCallbacksOverdue + leadCallbacksOverdue,
+    whatsappSent: registeredWhatsappSent + importedWhatsappSent + leadWhatsAppShared,
     registeredAssigned, importedAssigned,
     active: statusCounts.active || 0,
     inactive: ["inactive", "wrong_number", "not_channel_partner", "duplicate", "do_not_contact"].reduce((sum, status) => sum + (statusCounts[status] || 0), 0),
     callbackRequested: statusCounts.callback_requested || 0,
+    leads: leadCount,
+    leadsContacted: leadContacted,
   };
 }
 
@@ -198,6 +304,95 @@ router.post("/auth/login", employeeLoginLimiter, [body("employeeId").trim().isLe
 
 router.get("/auth/me", crmStaffAuth, async (req, res) => res.json({ employee: publicStaff(req.crmStaff) }));
 
+router.get("/reports/me", crmStaffAuth, async (req, res) => {
+  try { return res.json({ employee: publicStaff(req.crmStaff), ...(await employeeReport(req.crmStaff._id, indiaRange(req.query.from, req.query.to))) }); }
+  catch (error) { return res.status(400).json({ error: error.message || "Unable to load report." }); }
+});
+
+router.get("/lead-reports/me", crmStaffAuth, async (req, res) => {
+  try { return res.json({ employee: publicStaff(req.crmStaff), ...(await employeeLeadReport(req.crmStaff._id, indiaRange(req.query.from, req.query.to))) }); }
+  catch (error) { return res.status(400).json({ error: error.message || "Unable to load lead report." }); }
+});
+
+router.get("/mine/leads", crmStaffAuth, async (req, res) => {
+  try {
+    const query = { assignedEmployeeId: req.crmStaff._id };
+    if (clean(req.query.status, 60) && LEAD_STATUSES.has(clean(req.query.status, 60))) query.status = clean(req.query.status, 60);
+    const search = clean(req.query.search, 120);
+    if (search) {
+      const escaped = escapeRegex(search); const digits = search.replace(/[^0-9]/g, "");
+      query.$or = [{ name: new RegExp(escaped, "i") }, { city: new RegExp(escaped, "i") }, { area: new RegExp(escaped, "i") }, { serialNumber: Number.isFinite(Number(search)) ? Number(search) : -1 }, ...(digits ? [{ mobile: new RegExp(digits) }] : [])];
+    }
+    if (req.query.due === "today") { const { start, end } = indiaDayBounds(); query.nextFollowUpAt = { $gte: start, $lte: end }; }
+    if (req.query.due === "overdue") query.nextFollowUpAt = { $lt: new Date() };
+    const leads = await CPEmployeeLead.find(query).sort({ nextFollowUpAt: 1, createdAt: -1 }).limit(1000).lean();
+    return res.json({ leads: leads.map(presentLead), statuses: [...LEAD_STATUSES] });
+  } catch (error) { return res.status(500).json({ error: "Unable to load customer leads." }); }
+});
+
+router.post("/mine/leads", crmStaffAuth, async (req, res) => {
+  try {
+    const name = clean(req.body.name, 120); const mobile = normalizeMobile(req.body.mobile);
+    if (name.length < 2) return res.status(400).json({ error: "Enter the customer name." });
+    if (!MOBILE.test(mobile)) return res.status(400).json({ error: "Enter a valid Indian mobile number." });
+    const mobileHash = hashLookup(mobile, "employee-customer-lead-mobile");
+    const duplicate = await CPEmployeeLead.findOne({ mobileHash }).select("name serialNumber status").lean();
+    if (duplicate) return res.status(409).json({ error: `This number is already saved as lead #${duplicate.serialNumber} (${duplicate.name}).` });
+    const last = await CPEmployeeLead.findOne().sort({ serialNumber: -1 }).select("serialNumber").lean();
+    const now = new Date();
+    const nextFollowUpAt = req.body.nextFollowUpAt ? new Date(req.body.nextFollowUpAt) : null;
+    const visitAt = req.body.visitAt ? new Date(req.body.visitAt) : null;
+    if ((nextFollowUpAt && Number.isNaN(nextFollowUpAt.getTime())) || (visitAt && Number.isNaN(visitAt.getTime()))) return res.status(400).json({ error: "Enter a valid callback or visit date and time." });
+    const lead = await CPEmployeeLead.create({
+      serialNumber: (last?.serialNumber || 0) + 1, name, mobile, mobileHash,
+      alternateMobile: normalizeMobile(req.body.alternateMobile), whatsappMobile: normalizeMobile(req.body.whatsappMobile), email: clean(req.body.email, 254).toLowerCase(),
+      source: clean(req.body.source, 80) || "employee", projectInterest: clean(req.body.projectInterest, 200), propertyType: clean(req.body.propertyType, 80), budget: clean(req.body.budget, 80), city: clean(req.body.city, 100), area: clean(req.body.area, 100),
+      status: LEAD_STATUSES.has(clean(req.body.status, 60)) ? clean(req.body.status, 60) : "new", feedback: clean(req.body.feedback, 2000), nextFollowUpAt, visitAt,
+      createdByEmployeeId: req.crmStaff._id, assignedEmployeeId: req.crmStaff._id, lastActivityAt: now,
+    });
+    const actions = [{ leadId: lead._id, employeeId: req.crmStaff._id, action: "lead_created", status: lead.status, note: lead.feedback }];
+    if (nextFollowUpAt) actions.push({ leadId: lead._id, employeeId: req.crmStaff._id, action: "callback_scheduled", status: lead.status, scheduledAt: nextFollowUpAt });
+    if (visitAt) actions.push({ leadId: lead._id, employeeId: req.crmStaff._id, action: "site_visit_scheduled", status: lead.status, scheduledAt: visitAt });
+    await CPEmployeeLeadActivity.insertMany(actions);
+    return res.status(201).json({ message: "Customer lead registered.", lead: presentLead(lead) });
+  } catch (error) {
+    if (error.code === 11000) return res.status(409).json({ error: "This customer lead already exists." });
+    return res.status(500).json({ error: "Unable to register customer lead." });
+  }
+});
+
+router.get("/mine/leads/:id", crmStaffAuth, async (req, res) => {
+  try {
+    const lead = await CPEmployeeLead.findOne({ _id: req.params.id, assignedEmployeeId: req.crmStaff._id }).lean();
+    if (!lead) return res.status(404).json({ error: "Customer lead not found." });
+    const activities = await CPEmployeeLeadActivity.find({ leadId: lead._id }).sort({ createdAt: -1 }).limit(200).lean();
+    return res.json({ lead: presentLead(lead), activities: activities.map((item) => ({ ...item, id: String(item._id) })) });
+  } catch (error) { return res.status(404).json({ error: "Customer lead not found." }); }
+});
+
+router.patch("/mine/leads/:id", crmStaffAuth, async (req, res) => {
+  try {
+    const lead = await CPEmployeeLead.findOne({ _id: req.params.id, assignedEmployeeId: req.crmStaff._id }).select("+mobileHash");
+    if (!lead) return res.status(404).json({ error: "Customer lead not found." });
+    const nextStatus = clean(req.body.status, 60);
+    if (nextStatus && !LEAD_STATUSES.has(nextStatus)) return res.status(400).json({ error: "Choose a valid lead status." });
+    const fields = ["name", "email", "source", "projectInterest", "propertyType", "budget", "city", "area", "feedback"];
+    fields.forEach((field) => { if (Object.prototype.hasOwnProperty.call(req.body, field)) lead[field] = clean(req.body[field], field === "feedback" ? 2000 : 254); });
+    ["alternateMobile", "whatsappMobile"].forEach((field) => { if (Object.prototype.hasOwnProperty.call(req.body, field)) lead[field] = normalizeMobile(req.body[field]); });
+    if (nextStatus) lead.status = nextStatus;
+    const nextFollowUpAt = req.body.nextFollowUpAt ? new Date(req.body.nextFollowUpAt) : null;
+    const visitAt = req.body.visitAt ? new Date(req.body.visitAt) : null;
+    if ((nextFollowUpAt && Number.isNaN(nextFollowUpAt.getTime())) || (visitAt && Number.isNaN(visitAt.getTime()))) return res.status(400).json({ error: "Enter a valid callback or visit date and time." });
+    if (Object.prototype.hasOwnProperty.call(req.body, "nextFollowUpAt")) lead.nextFollowUpAt = nextFollowUpAt;
+    if (Object.prototype.hasOwnProperty.call(req.body, "visitAt")) lead.visitAt = visitAt;
+    const action = clean(req.body.action, 60);
+    const allowedActions = new Set(["status_updated", "call_result", "whatsapp_shared", "callback_scheduled", "site_visit_scheduled", "site_visit_completed", "note"]);
+    lead.lastActivityAt = new Date(); await lead.save();
+    await CPEmployeeLeadActivity.create({ leadId: lead._id, employeeId: req.crmStaff._id, action: allowedActions.has(action) ? action : "status_updated", status: lead.status, note: clean(req.body.activityNote || req.body.feedback, 2000), scheduledAt: nextFollowUpAt || visitAt || null });
+    return res.json({ message: "Lead activity saved.", lead: presentLead(lead) });
+  } catch (error) { return res.status(400).json({ error: error.message || "Unable to update customer lead." }); }
+});
+
 router.get("/admin/employees", auth, adminOnly, async (_req, res) => {
   try {
     const employees = await CRMStaffAccount.find({ isDeleted: { $ne: true } }).sort({ isActive: -1, createdAt: -1 }).lean();
@@ -213,10 +408,11 @@ router.get("/admin/employees/:id/activity", auth, adminOnly, async (req, res) =>
   try {
     const employee = await CRMStaffAccount.findById(req.params.id).lean();
     if (!employee || employee.isDeleted) return res.status(404).json({ error: "Employee not found." });
-    const [metrics, registeredInteractions, importedInteractions, registeredFollowUps, importedFollowUps, tasks] = await Promise.all([
+    const [metrics, registeredInteractions, importedInteractions, leadInteractions, registeredFollowUps, importedFollowUps, tasks] = await Promise.all([
       staffMetrics(employee._id),
       CPCRMInteraction.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(500).populate("partnerId", "applicationNumber company.name contact.name contact.mobile").lean(),
       CPProspectInteraction.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(500).populate("prospectId", "company.name contact.name contact.mobile prospectType").lean(),
+      CPEmployeeLeadActivity.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(500).populate("leadId", "serialNumber name mobile").lean(),
       CPCRMFollowUp.find({ employeeId: employee._id }).sort({ scheduledAt: -1 }).limit(500).populate("partnerId", "applicationNumber company.name contact.name contact.mobile").lean(),
       CPProspectFollowUp.find({ employeeId: employee._id }).sort({ scheduledAt: -1 }).limit(500).populate("prospectId", "company.name contact.name contact.mobile prospectType").lean(),
       CPCRMTask.find({ employeeId: employee._id }).sort({ createdAt: -1 }).limit(50).lean(),
@@ -224,6 +420,7 @@ router.get("/admin/employees/:id/activity", auth, adminOnly, async (req, res) =>
     const interactions = [
       ...registeredInteractions.map((item) => ({ ...item, id: String(item._id), source: "registered", partner: item.partnerId ? { id: String(item.partnerId._id), applicationNumber: item.partnerId.applicationNumber, companyName: item.partnerId.company?.name || "", contactName: item.partnerId.contact?.name || "", mobile: item.partnerId.contact?.mobile || "" } : null })),
       ...importedInteractions.map((item) => ({ ...item, id: String(item._id), source: item.prospectId?.prospectType === "broker" ? "broker" : "imported", partner: item.prospectId ? { id: String(item.prospectId._id), applicationNumber: "", companyName: item.prospectId.company?.name || "", contactName: item.prospectId.contact?.name || "", mobile: item.prospectId.contact?.mobile || "" } : null })),
+      ...leadInteractions.map((item) => ({ ...item, id: String(item._id), source: "lead", outcome: item.status, partner: item.leadId ? { id: String(item.leadId._id), applicationNumber: `Lead #${item.leadId.serialNumber}`, companyName: "Customer lead", contactName: item.leadId.name || "", mobile: item.leadId.mobile || "" } : null })),
     ].sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt)).slice(0, 500);
     const followUps = [
       ...registeredFollowUps.map((item) => ({ ...item, id: String(item._id), source: "registered", partner: item.partnerId ? { id: String(item.partnerId._id), companyName: item.partnerId.company?.name || "" } : null })),
@@ -238,6 +435,28 @@ router.get("/admin/employees/:id/activity", auth, adminOnly, async (req, res) =>
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Employee not found." });
     return res.status(500).json({ error: "Unable to load employee activity." });
+  }
+});
+
+router.get("/admin/employees/:id/report", auth, adminOnly, async (req, res) => {
+  try {
+    const employee = await CRMStaffAccount.findById(req.params.id).lean();
+    if (!employee || employee.isDeleted) return res.status(404).json({ error: "Employee not found." });
+    return res.json({ employee: publicStaff(employee), ...(await employeeReport(employee._id, indiaRange(req.query.from, req.query.to))) });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Employee not found." });
+    return res.status(400).json({ error: error.message || "Unable to load report." });
+  }
+});
+
+router.get("/admin/employees/:id/lead-report", auth, adminOnly, async (req, res) => {
+  try {
+    const employee = await CRMStaffAccount.findById(req.params.id).lean();
+    if (!employee || employee.isDeleted) return res.status(404).json({ error: "Employee not found." });
+    return res.json({ employee: publicStaff(employee), ...(await employeeLeadReport(employee._id, indiaRange(req.query.from, req.query.to))) });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Employee not found." });
+    return res.status(400).json({ error: error.message || "Unable to load lead report." });
   }
 });
 
@@ -313,6 +532,7 @@ router.delete("/admin/employees/:id", auth, adminOnly, async (req, res) => {
     const [registered, imported] = await Promise.all([
       CPCRMProfile.updateMany({ assignedEmployeeId: employee._id }, { $set: { assignedEmployeeId: null } }),
       CPProspect.updateMany({ assignedEmployeeId: employee._id }, { $set: { assignedEmployeeId: null, assignedAt: null, assignedBy: null } }),
+      CPEmployeeLead.updateMany({ assignedEmployeeId: employee._id }, { $set: { assignedEmployeeId: null } }),
       CPCRMTask.updateMany({ employeeId: employee._id, status: "active" }, { $set: { status: "cancelled" } }),
       CPCRMTaskItem.updateMany({ employeeId: employee._id, status: "pending" }, { $set: { status: "skipped" } }),
       CPCRMFollowUp.updateMany({ employeeId: employee._id, status: "pending" }, { $set: { status: "cancelled" } }),
@@ -404,7 +624,7 @@ router.patch("/admin/partners/:partnerId/assign", auth, adminOnly, async (req, r
 });
 
 router.get("/admin/templates", auth, adminOnly, async (_req, res) => {
-  const templates = await CPCRMMessageTemplate.find().sort({ isActive: -1, createdAt: -1 }).lean();
+  const templates = await CPCRMMessageTemplate.find({ isDeleted: { $ne: true } }).sort({ isActive: -1, createdAt: -1 }).lean();
   return res.json({ templates: templates.map((item) => ({ ...item, id: String(item._id) })) });
 });
 
@@ -421,7 +641,7 @@ router.post("/admin/templates", auth, adminOnly, [body("name").trim().isLength({
 router.patch("/admin/templates/:id", auth, adminOnly, async (req, res) => {
   try {
     const template = await CPCRMMessageTemplate.findById(req.params.id);
-    if (!template) return res.status(404).json({ error: "Message template not found." });
+    if (!template || template.isDeleted) return res.status(404).json({ error: "Message template not found." });
     if (typeof req.body.isActive === "boolean") template.isActive = req.body.isActive;
     if (req.body.name !== undefined) template.name = clean(req.body.name, 120);
     if (req.body.body !== undefined) template.body = clean(req.body.body, 5000);
@@ -432,6 +652,22 @@ router.patch("/admin/templates/:id", auth, adminOnly, async (req, res) => {
   } catch (error) {
     if (error.name === "CastError") return res.status(404).json({ error: "Message template not found." });
     return res.status(500).json({ error: "Unable to update message template." });
+  }
+});
+
+router.delete("/admin/templates/:id", auth, adminOnly, async (req, res) => {
+  try {
+    const template = await CPCRMMessageTemplate.findById(req.params.id);
+    if (!template || template.isDeleted) return res.status(404).json({ error: "Message template not found." });
+    template.isActive = false;
+    template.isDeleted = true;
+    template.deletedAt = new Date();
+    template.deletedBy = req.user._id;
+    await template.save();
+    return res.json({ message: "Message template deleted." });
+  } catch (error) {
+    if (error.name === "CastError") return res.status(404).json({ error: "Message template not found." });
+    return res.status(500).json({ error: "Unable to delete message template." });
   }
 });
 

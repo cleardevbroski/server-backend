@@ -1,4 +1,5 @@
 const express = require("express");
+const mongoose = require("mongoose");
 const { body, validationResult } = require("express-validator");
 const Builder = require("../models/Builder");
 const { unsetBuilderRef } = require("../services/propertyLinkSync");
@@ -57,7 +58,10 @@ router.get("/", async (req, res) => {
 // GET /api/builders/:slug
 router.get("/:slug", async (req, res) => {
   try {
-    const builder = await Builder.findOne({ slug: req.params.slug }).lean();
+    const identifier = String(req.params.slug || "").trim();
+    const lookup = [{ slug: identifier }];
+    if (mongoose.isValidObjectId(identifier)) lookup.push({ _id: identifier });
+    const builder = await Builder.findOne({ $or: lookup }).lean();
     if (!builder) {
       return res.status(404).json({ error: "Builder not found" });
     }

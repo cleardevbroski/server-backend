@@ -262,8 +262,11 @@ describe("Property status workflow", () => {
       published: false,
       submittedBy: "admin",
       bulkImport: { packageKey: "reviewed.zip::100", packageName: "reviewed.zip", packageSize: 100, batchKey: "reviewed-batch", importState: "complete" },
-      configs: ["3.5 BHK"],
-      configurationDetails: [{ configuration: "3.5 BHK", builtUpArea: "1800 Sq. Ft.", bedrooms: 3, facings: [] }],
+      configs: ["3.5 BHK", "4.5 BHK"],
+      configurationDetails: [
+        { configuration: "3.5 BHK", builtUpArea: "1800 Sq. Ft.", bedrooms: 3.5, facings: [] },
+        { configuration: "4.5 BHK", builtUpArea: "2200 Sq. Ft.", bedrooms: 4.5, facings: [] },
+      ],
     });
 
     const response = await request(app)
@@ -274,6 +277,8 @@ describe("Property status workflow", () => {
     expect(response.status).toBe(200);
     expect(response.body.property).toMatchObject({ status: "approved", published: true, verified: true });
     expect(response.body.property.configurationDetails[0]).toMatchObject({ configuration: "3.5 BHK", builtUpArea: "1800 Sq. Ft." });
+    expect(response.body.property.configurationDetails[1]).toMatchObject({ configuration: "4.5 BHK", builtUpArea: "2200 Sq. Ft." });
+    expect(response.body.property.configurationDetails.map((row) => row.bedrooms)).toEqual([3, 4]);
     expect(response.body.property.reviewReadiness.warnings).toEqual(expect.arrayContaining(["Configuration prices", "Configuration carpet areas", "Configuration bathroom and balcony counts", "Possession timeline"]));
   });
 });

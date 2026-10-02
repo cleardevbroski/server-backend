@@ -628,6 +628,12 @@ function normalizeApartmentPayload(input, { requireStructured = false, allowRevi
 
   const rows = payload.configurationDetails.map((row, index) => {
     const configuration = normalizeConfiguration(row.configuration);
+    const configurationBhk = Number(configuration.match(/^(\d+(?:\.5)?)\s*BHK$/i)?.[1]);
+    // A half-BHK describes an additional study/utility room, not half a
+    // bedroom. Old imports sometimes copied the BHK label into bedrooms.
+    const bedroomsInput = !Number.isInteger(configurationBhk) && Number(row.bedrooms) === configurationBhk
+      ? Math.floor(configurationBhk)
+      : row.bedrooms;
     const facings = Array.isArray(row.facings) ? [...new Set(row.facings.map((v) => String(v).trim()).filter(Boolean))] : [];
     if (facings.some((facing) => !FACING_OPTIONS.has(facing))) {
       throw new PropertyPayloadError(`Configuration ${index + 1} contains invalid facing options`);
@@ -635,14 +641,15 @@ function normalizeApartmentPayload(input, { requireStructured = false, allowRevi
     return {
       id: String(row.id || `${configuration}-${index + 1}`).trim(),
       configuration,
+      variantName: String(row.variantName || "").trim().slice(0, 150),
       price: allowReviewedImportGaps ? optionalPositiveDisplay(row.price, `${configuration} price`, "price") : requireText(row.price, `${configuration} price`),
       // Kept only for backwards compatibility with already-published records.
       superBuiltUpArea: String(row.superBuiltUpArea || "").trim(),
       carpetArea: allowReviewedImportGaps ? optionalPositiveDisplay(row.carpetArea, `${configuration} carpet area`) : requireText(row.carpetArea, `${configuration} carpet area`),
       builtUpArea: String(row.builtUpArea || "").trim(),
       bedrooms: allowReviewedImportGaps
-        ? configuration === "Studio" ? 0 : optionalInteger(row.bedrooms, `${configuration} bedrooms`, 1)
-        : requireInteger(row.bedrooms, `${configuration} bedrooms`, configuration === "Studio" ? 0 : 1),
+        ? configuration === "Studio" ? 0 : optionalInteger(bedroomsInput, `${configuration} bedrooms`, 1)
+        : requireInteger(bedroomsInput, `${configuration} bedrooms`, configuration === "Studio" ? 0 : 1),
       bathrooms: allowReviewedImportGaps ? optionalInteger(row.bathrooms, `${configuration} bathrooms`, 0) : requireInteger(row.bathrooms, `${configuration} bathrooms`, 1),
       balconies: allowReviewedImportGaps ? optionalInteger(row.balconies, `${configuration} balconies`, 0) : requireInteger(row.balconies, `${configuration} balconies`, 0),
       facings,

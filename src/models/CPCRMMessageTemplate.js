@@ -15,9 +15,12 @@ const cpCrmMessageTemplateSchema = new mongoose.Schema({
   body: { type: String, required: true, trim: true, maxlength: 5000 },
   attachments: { type: [attachmentSchema], default: [] },
   isActive: { type: Boolean, default: true, index: true },
+  isDeleted: { type: Boolean, default: false, index: true },
+  deletedAt: { type: Date, default: null },
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: null },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 }, { timestamps: true });
 
-cpCrmMessageTemplateSchema.index({ audience: 1, kind: 1, isActive: 1, createdAt: -1 });
+cpCrmMessageTemplateSchema.index({ isDeleted: 1, audience: 1, kind: 1, isActive: 1, createdAt: -1 });
 
 module.exports = mongoose.model("CPCRMMessageTemplate", cpCrmMessageTemplateSchema);

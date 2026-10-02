@@ -68,6 +68,7 @@ const configurationDetailSchema = new mongoose.Schema(
   {
     id: { type: String, default: "", trim: true },
     configuration: { type: String, trim: true },
+    variantName: { type: String, default: "", trim: true, maxlength: 150 },
     price: { type: String, trim: true },
     superBuiltUpArea: { type: String, trim: true },
     carpetArea: { type: String, trim: true },

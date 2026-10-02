@@ -4,6 +4,7 @@ const CRMStaffAccount = require("../src/models/CRMStaffAccount");
 const CPCRMFollowUp = require("../src/models/CPCRMFollowUp");
 const CPCRMInteraction = require("../src/models/CPCRMInteraction");
 const CPCRMProfile = require("../src/models/CPCRMProfile");
+const CPCRMMessageTemplate = require("../src/models/CPCRMMessageTemplate");
 const { createAdminToken } = require("./helpers");
 
 const doc = (name = "document.pdf", mimeType = "application/pdf") => ({
@@ -24,6 +25,28 @@ function application() {
 }
 
 describe("CP Management CRM", () => {
+  it("soft deletes message templates from the admin directory", async () => {
+    const { token: adminToken } = await createAdminToken();
+    const created = await request(app).post("/api/cp-crm/admin/templates").set("Authorization", `Bearer ${adminToken}`).send({
+      name: "Temporary template", kind: "follow_up", body: "Hello {{cp_name}}",
+    });
+    expect(created.status).toBe(201);
+
+    const templateId = created.body.template.id;
+    const removed = await request(app).delete(`/api/cp-crm/admin/templates/${templateId}`).set("Authorization", `Bearer ${adminToken}`);
+    expect(removed.status).toBe(200);
+    expect(removed.body.message).toBe("Message template deleted.");
+
+    const stored = await CPCRMMessageTemplate.findById(templateId).lean();
+    expect(stored).toMatchObject({ isActive: false, isDeleted: true });
+    expect(stored.deletedAt).toBeInstanceOf(Date);
+
+    const directory = await request(app).get("/api/cp-crm/admin/templates").set("Authorization", `Bearer ${adminToken}`);
+    expect(directory.body.templates).toHaveLength(0);
+    const updateDeleted = await request(app).patch(`/api/cp-crm/admin/templates/${templateId}`).set("Authorization", `Bearer ${adminToken}`).send({ isActive: true });
+    expect(updateDeleted.status).toBe(404);
+  }, 60000);
+
   it("tracks an assigned employee call, callback, and manual WhatsApp result", async () => {
     const { token: adminToken } = await createAdminToken();
     const registration = await request(app).post("/api/channel-partners").send(application());

@@ -482,6 +482,8 @@ async function applyAdminPropertyWorkflow(property, action, admin, note = "") {
     property.status = target;
     property.published = false;
     property.verified = false;
+    property.homepageSections = [];
+    property.websiteSection = "None";
     property.rejectionReason = action === "reject" ? String(note || "Rejected during admin review").trim().slice(0, 1000) : "";
   }
   property.reviewedBy = admin?._id || admin || null;
@@ -532,8 +534,8 @@ router.get("/", async (req, res) => {
       filter.propertyType = String(propertyType);
     }
     if (bedrooms) {
-      const b = parseInt(bedrooms);
-      if (Number.isInteger(b)) {
+      const b = Number(bedrooms);
+      if (Number.isFinite(b) && b >= 1) {
         filter.$and = [
           { $or: [
             { bedrooms: b },
@@ -614,8 +616,8 @@ router.get("/admin", auth, adminOnly, async (req, res) => {
     if (propertyType) filter.propertyType = String(propertyType);
     if (status) filter.status = String(status);
     if (bedrooms) {
-      const b = parseInt(bedrooms);
-      if (Number.isInteger(b)) {
+      const b = Number(bedrooms);
+      if (Number.isFinite(b) && b >= 1) {
         filter.$or = [
           { bedrooms: b },
           { configurationDetails: { $elemMatch: { bedrooms: b } } },
@@ -1203,6 +1205,16 @@ router.put(
         savePending ? prepareOptionalPropertyPayload(req.body, existing) : prepareSubmittedPropertyPayload(req.body, existing)
       );
       const updates = await convertPropertyMedia(includeAdminWorkflowFields(normalizedUpdates, req.body));
+      const requestPlacesOnHomepage = Array.isArray(updates.homepageSections) && updates.homepageSections.length > 0;
+      const isLivePublicProject = existing.published !== false
+        && (!existing.status || ["approved", "published"].includes(existing.status));
+      if (requestPlacesOnHomepage && !isLivePublicProject) {
+        return res.status(400).json({ error: "Only live published projects can be placed on the homepage." });
+      }
+      if (updates.published === false || ["pending", "recheck", "rejected", "draft", "submitted", "under_review", "changes_requested"].includes(updates.status)) {
+        updates.homepageSections = [];
+        updates.websiteSection = "None";
+      }
       existing.set(withMediaLedger(updates, existing));
       const property = await existing.save();
 

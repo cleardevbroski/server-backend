@@ -5,20 +5,20 @@ const adminOnly = require("../middleware/adminOnly");
 const { uploadRequestStream } = require("../utils/mediaUpload");
 
 const router = express.Router();
-const MAX_BYTES = 15 * 1024 * 1024;
-const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
+const MAX_BYTES = 200 * 1024 * 1024;
+const ALLOWED = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf", "video/mp4", "video/webm", "video/quicktime"]);
 
 router.post("/", rateLimit({ windowMs: 15 * 60 * 1000, max: 60 }), auth, adminOnly, async (req, res) => {
   const mime = String(req.headers["content-type"] || "").split(";")[0].toLowerCase();
   const length = Number(req.headers["content-length"] || 0);
-  if (!ALLOWED.has(mime)) return res.status(415).json({ error: "Upload a JPG, PNG, WebP, or PDF file." });
+  if (!ALLOWED.has(mime)) return res.status(415).json({ error: "Upload a JPG, PNG, WebP, MP4, WebM, MOV, or PDF file." });
   if (!length) return res.status(411).json({ error: "File size is required." });
-  if (length > MAX_BYTES) return res.status(413).json({ error: "File exceeds the 15 MB limit." });
+  if (length > MAX_BYTES) return res.status(413).json({ error: "File exceeds the 200 MB limit." });
   try {
     const url = await uploadRequestStream(req, {
       mime,
       maxBytes: MAX_BYTES,
-      resourceType: mime === "application/pdf" ? "raw" : "image",
+      resourceType: mime === "application/pdf" ? "raw" : mime.startsWith("video/") ? "video" : "image",
       folder: "clear-title/cp-crm/materials",
     });
     const rawName = String(req.headers["x-file-name"] || "Project material").slice(0, 180);

@@ -102,8 +102,9 @@ function uploadRequestStream(request, { resourceType, folder, maxBytes, mime, up
       reject(error);
     };
 
-    cloudStream = cloudinary.uploader.upload_stream(
-      { resource_type: resourceType, folder, ...uploadOptions },
+    const uploadMethod = resourceType === "video" ? cloudinary.uploader.upload_chunked_stream : cloudinary.uploader.upload_stream;
+    cloudStream = uploadMethod(
+      { resource_type: resourceType, folder, ...(resourceType === "video" ? { chunk_size: 6 * 1024 * 1024 } : {}), ...uploadOptions },
       (error, result) => {
         if (error) return fail(error);
         if (settled) return;

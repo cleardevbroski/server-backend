@@ -3,3 +3,4 @@ node_modules/
 clear-title-backend.env
 *.log
 .worktrees/
+storage/cp-campaign-media/

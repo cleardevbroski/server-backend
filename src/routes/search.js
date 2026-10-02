@@ -26,8 +26,8 @@ router.get("/", searchLimiter, async (req, res) => {
       filter.propertyType = String(type);
     }
     if (bhk) {
-      const b = parseInt(bhk);
-      if (Number.isInteger(b)) filter.$and = [{ $or: [
+      const b = Number(bhk);
+      if (Number.isFinite(b) && b >= 1) filter.$and = [{ $or: [
         { bedrooms: b },
         { configurationDetails: { $elemMatch: { bedrooms: b } } },
         { "villaDetails.configurationDetails": { $elemMatch: { bedrooms: b } } },

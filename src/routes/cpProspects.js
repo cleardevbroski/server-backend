@@ -259,7 +259,7 @@ async function prospectDetail(prospect) {
   const [interactions, followUps, templates] = await Promise.all([
     CPProspectInteraction.find({ prospectId: prospect._id }).sort({ createdAt: -1 }).limit(100).populate("employeeId", "employeeId name").lean(),
     CPProspectFollowUp.find({ prospectId: prospect._id }).sort({ scheduledAt: -1 }).limit(50).populate("employeeId", "employeeId name").lean(),
-    CPCRMMessageTemplate.find({ isActive: true, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] }).sort({ kind: 1, createdAt: -1 }).lean(),
+    CPCRMMessageTemplate.find({ isActive: true, isDeleted: { $ne: true }, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] }).sort({ kind: 1, createdAt: -1 }).lean(),
   ]);
   const presentActivity = (item) => ({ ...item, id: String(item._id), employee: item.employeeId ? publicEmployee(item.employeeId) : null });
   return {
@@ -721,7 +721,7 @@ router.post("/mine/prospects/:id/whatsapp-open", crmStaffAuth, requireCrmPermiss
     let template = null;
     let messageBody = "";
     if (req.body.templateId) {
-      template = await CPCRMMessageTemplate.findOne({ _id: req.body.templateId, isActive: true, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] });
+      template = await CPCRMMessageTemplate.findOne({ _id: req.body.templateId, isActive: true, isDeleted: { $ne: true }, $or: [{ audience: { $in: ["all", audience] } }, { audience: { $exists: false } }] });
       if (!template) return res.status(400).json({ error: "Choose an active admin message template." });
       messageBody = clean(req.body.messageBody, 5000);
     } else if (prospect.prospectType === "broker") {
