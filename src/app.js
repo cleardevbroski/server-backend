@@ -18,7 +18,12 @@ const searchRoutes = require("./routes/search");
 const app = express();
 
 // ─── Security & Parsing ────────────────────────────────────────
-app.use(helmet());
+app.disable("x-powered-by");
+app.set("trust proxy", 1);
+app.use(helmet({
+  crossOriginEmbedderPolicy: false,
+  hsts: process.env.NODE_ENV === "production" ? undefined : false,
+}));
 function normalizeOrigin(value) {
   if (!value) return "";
 
@@ -32,11 +37,12 @@ function normalizeOrigin(value) {
 
 function getAllowedOrigins(frontendUrlValue) {
   const defaults = [
-    "http://localhost:5173",
-    "http://localhost:3000",
     "https://cleartitleone.com",
     "https://www.cleartitleone.com",
   ];
+  if (process.env.NODE_ENV !== "production") {
+    defaults.push("http://localhost:5173", "http://localhost:3000");
+  }
   const configuredOrigins = frontendUrlValue
     ? frontendUrlValue.split(",").map(normalizeOrigin).filter(Boolean)
     : [];
@@ -105,6 +111,7 @@ app.use("/api/builders", builderRoutes);
 app.use("/api/hero", heroRoutes);
 app.use("/api/advertisements", advertisementRoutes);
 app.use("/api/cms", require("./routes/cms"));
+app.use("/api/site-settings", require("./routes/socialSettings"));
 app.use("/api/leads", leadRoutes);
 app.use("/api/channel-partners", require("./routes/channelPartners"));
 app.use("/api/channel-partner-auth", require("./routes/channelPartnerAuth"));

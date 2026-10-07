@@ -1,5 +1,6 @@
 const express = require("express");
 const { body, query, validationResult } = require("express-validator");
+const rateLimit = require("express-rate-limit");
 const Property = require("../models/Property");
 const Lead = require("../models/Lead");
 const FavoriteProperty = require("../models/FavoriteProperty");
@@ -25,6 +26,21 @@ const { PROPERTY_DOCUMENT_MAX_BYTES, PROPERTY_WALKTHROUGH_MAX_BYTES } = require(
 
 const router = express.Router();
 const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
+const PUBLIC_SORTS = new Map([
+  ["-createdAt", { createdAt: -1 }],
+  ["createdAt", { createdAt: 1 }],
+  ["-updatedAt", { updatedAt: -1 }],
+  ["updatedAt", { updatedAt: 1 }],
+  ["-priceValue", { priceValue: -1 }],
+  ["priceValue", { priceValue: 1 }],
+]);
+const documentDownloadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many document downloads. Please try again later." },
+});
 
 function publicVisibilityFilter() {
   return {
@@ -533,14 +549,21 @@ router.get("/", async (req, res) => {
       sort = "-createdAt",
     } = req.query;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const requestedSort = String(sort || "-createdAt");
+    const sortSpec = PUBLIC_SORTS.get(requestedSort) || PUBLIC_SORTS.get("-createdAt");
+    const cityValue = String(city || "").trim().slice(0, 120);
+    const propertyTypeValue = String(propertyType || "").trim().slice(0, 40);
+    const searchValue = String(search || "").trim().slice(0, 160);
+
     const filter = { propertyType: { $nin: RETIRED_PROPERTY_TYPES } };
 
-    if (city) filter["locality.city"] = String(city);
-    if (propertyType) {
-      if (RETIRED_PROPERTY_TYPES.includes(String(propertyType))) {
-        return res.json({ properties: [], pagination: { page: parseInt(page), limit: Math.min(Math.max(parseInt(limit) || 20, 1), 100), total: 0, pages: 0 } });
+    if (cityValue) filter["locality.city"] = cityValue;
+    if (propertyTypeValue) {
+      if (RETIRED_PROPERTY_TYPES.includes(propertyTypeValue)) {
+        return res.json({ properties: [], pagination: { page: pageNum, limit: Math.min(Math.max(parseInt(limit) || 20, 1), 100), total: 0, pages: 0 } });
       }
-      filter.propertyType = String(propertyType);
+      filter.propertyType = propertyTypeValue;
     }
     if (bedrooms) {
       const b = Number(bedrooms);
@@ -554,11 +577,12 @@ router.get("/", async (req, res) => {
         ];
       }
     }
-    if (search) filter.$text = { $search: String(search) };
+    if (searchValue) filter.$text = { $search: searchValue };
     if (minPrice || maxPrice) {
       filter.priceValue = {};
-      if (minPrice) filter.priceValue.$gte = Number(minPrice);
-      if (maxPrice) filter.priceValue.$lte = Number(maxPrice);
+      if (minPrice && Number.isFinite(Number(minPrice))) filter.priceValue.$gte = Number(minPrice);
+      if (maxPrice && Number.isFinite(Number(maxPrice))) filter.priceValue.$lte = Number(maxPrice);
+      if (!Object.keys(filter.priceValue).length) delete filter.priceValue;
     }
 
     // Public search returns only approved listings (legacy docs without status count as approved)
@@ -566,9 +590,9 @@ router.get("/", async (req, res) => {
 
     // Clamp limit — properties embed base64 media, so unbounded pages are a DoS vector
     const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
-    const skip = (parseInt(page) - 1) * limitNum;
+    const skip = (pageNum - 1) * limitNum;
     // city/propertyType are exact but case-insensitive — request the index collation so the query stays index-backed.
-    const collation = city || propertyType ? Property.CI_COLLATION : undefined;
+    const collation = cityValue || propertyTypeValue ? Property.CI_COLLATION : undefined;
 
     const [properties, total] = await Promise.all([
       Property.find(filter)
@@ -576,7 +600,7 @@ router.get("/", async (req, res) => {
         // Exclude heavy base64 media from list responses; keep first image as cover thumbnail
         .select("-videos -brochure")
         .slice("images", 1)
-        .sort(sort)
+        .sort(sortSpec)
         .skip(skip)
         .limit(limitNum)
         .populate("postedBy", "name phone")
@@ -590,7 +614,7 @@ router.get("/", async (req, res) => {
     return res.json({
       properties: mapped,
       pagination: {
-        page: parseInt(page),
+        page: pageNum,
         limit: limitNum,
         total,
         pages: Math.ceil(total / limitNum),
@@ -949,7 +973,7 @@ router.put("/my/:id/resubmit", auth, propertyOwnerOnly, async (req, res) => {
 
 // Customer or manual-guest document download. The permanent Cloudinary
 // URL is never included in the public property payload.
-router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOrGuest, async (req, res) => {
+router.get("/:id/documents/:phaseId/:documentId/download", documentDownloadLimiter, auth, customerOrGuest, async (req, res) => {
   try {
     if (!req.user.name || !req.user.email) {
       return res.status(400).json({ error: "Complete your name and email before downloading documents" });
@@ -1003,7 +1027,7 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOrGuest
   }
 });
 
-router.get("/:id/project-downloads/:documentId/download", auth, customerOrGuest, async (req, res) => {
+router.get("/:id/project-downloads/:documentId/download", documentDownloadLimiter, auth, customerOrGuest, async (req, res) => {
   try {
     if (!req.user.name || !req.user.email) {
       return res.status(400).json({ error: "Complete your name and email before downloading documents" });
