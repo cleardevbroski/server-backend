@@ -290,6 +290,7 @@ async function prepareBannerInput(body, { partial = false, currentBanner = null 
 // GET /api/hero/banners (public — published only)
 router.get("/banners", async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
     const activeBanners = await HeroBanner.find({ published: true, displayOnHomepage: { $ne: false } }).lean();
     const banners = activeBanners.sort((a, b) => {
       const orderDifference = (Number(a.order) || 0) - (Number(b.order) || 0);
@@ -322,6 +323,7 @@ router.get("/banners", async (req, res) => {
 // GET /api/hero/banners/admin (admin only — includes hidden and unpublished)
 router.get("/banners/admin", auth, adminOnly, async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
     const banners = await HeroBanner.find().sort("order").lean();
     return res.json({ banners: banners.map(presentBanner) });
   } catch (error) {
