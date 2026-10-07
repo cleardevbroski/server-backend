@@ -26,6 +26,15 @@ const { PROPERTY_DOCUMENT_MAX_BYTES, PROPERTY_WALKTHROUGH_MAX_BYTES } = require(
 const router = express.Router();
 const RETIRED_PROPERTY_TYPES = ["Rent", "Lease"];
 
+function publicVisibilityFilter() {
+  return {
+    $or: [
+      { status: { $in: ["approved", "published"] }, published: { $ne: false } },
+      { status: { $exists: false }, published: { $ne: false } },
+    ],
+  };
+}
+
 function assertPropertyTypeIsSupported(propertyType) {
   if (RETIRED_PROPERTY_TYPES.includes(String(propertyType || "").trim())) {
     throw new PropertyPayloadError("Rent and Lease property types are no longer supported");
@@ -553,7 +562,7 @@ router.get("/", async (req, res) => {
     }
 
     // Public search returns only approved listings (legacy docs without status count as approved)
-    filter.$or = [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }];
+    Object.assign(filter, publicVisibilityFilter());
 
     // Clamp limit — properties embed base64 media, so unbounded pages are a DoS vector
     const limitNum = Math.min(Math.max(parseInt(limit) || 20, 1), 100);
@@ -948,7 +957,7 @@ router.get("/:id/documents/:phaseId/:documentId/download", auth, customerOrGuest
     const property = await Property.findOne({
       _id: req.params.id,
       propertyType: { $nin: RETIRED_PROPERTY_TYPES },
-      $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
+      ...publicVisibilityFilter(),
     });
     if (!property) return res.status(404).json({ error: "Property not found" });
     const phase = property.reraPhases.id(req.params.phaseId);
@@ -1002,7 +1011,7 @@ router.get("/:id/project-downloads/:documentId/download", auth, customerOrGuest,
     const property = await Property.findOne({
       _id: req.params.id,
       propertyType: { $nin: RETIRED_PROPERTY_TYPES },
-      $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
+      ...publicVisibilityFilter(),
     });
     if (!property) return res.status(404).json({ error: "Property not found" });
     const document = property.projectDownloads.id(req.params.documentId);
@@ -1048,7 +1057,7 @@ router.get("/:id/project-downloads/:documentId/download", auth, customerOrGuest,
 // projects automatically affect the locality averages without altering prices.
 router.get("/price-comparison/:id", async (req, res) => {
   try {
-    const visible = { $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }] };
+    const visible = publicVisibilityFilter();
     const target = await Property.findOne({ _id: req.params.id, propertyType: { $nin: RETIRED_PROPERTY_TYPES }, ...visible }).lean();
     if (!target) return res.status(404).json({ error: "Property not found" });
     const targetLocation = localityName(target);
@@ -1121,7 +1130,7 @@ router.get("/:id", async (req, res) => {
     const property = await Property.findOne({
       _id: req.params.id,
       propertyType: { $nin: RETIRED_PROPERTY_TYPES },
-      $or: [{ status: { $in: ["approved", "published"] } }, { status: { $exists: false }, published: { $ne: false } }],
+      ...publicVisibilityFilter(),
     })
       .populate("postedBy", "name phone")
       .lean();
